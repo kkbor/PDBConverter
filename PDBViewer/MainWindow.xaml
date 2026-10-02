@@ -9,6 +9,8 @@
 
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Background="#F0F0F0">
             <Button x:Name="OpenButton" Content="Otwórz plik PDB..." Padding="8,4" Click="OpenButton_Click"/>
+            <Button x:Name="SaveButton" Content="Zapisz jako PDB..." Padding="8,4" Margin="8,0,0,0"
+                    Click="SaveButton_Click" IsEnabled="False"/>
             <TextBlock x:Name="InfoText" VerticalAlignment="Center" Margin="16,0,0,0"
                        Text="Brak wczytanej struktury"/>
 
@@ -55,6 +57,7 @@
                             <Style TargetType="ContentPresenter">
                                 <EventSetter Event="MouseEnter" Handler="SequenceItem_MouseEnter"/>
                                 <EventSetter Event="MouseLeave" Handler="SequenceItem_MouseLeave"/>
+                                <EventSetter Event="MouseLeftButtonUp" Handler="SequenceItem_Click"/>
                             </Style>
                         </ItemsControl.ItemContainerStyle>
 
@@ -68,9 +71,15 @@
                                 </Border>
 
                                 <DataTemplate.Triggers>
-                                    <!-- Stan podswietlenia trzymany jest w DANYCH (IsHighlighted),
+                                    <!-- Stan trzymany jest w DANYCH (IsSelected / IsHighlighted),
                                          nie w konkretnym elemencie UI - dzieki temu dziala
-                                         poprawnie mimo recyklingu kontenerow. -->
+                                         poprawnie mimo recyklingu kontenerow.
+                                         Kolejnosc ma znaczenie: IsHighlighted (hover) nizej,
+                                         wiec wizualnie przykrywa IsSelected, kiedy oba sa prawdziwe. -->
+                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                        <Setter TargetName="ItemBorder" Property="Background" Value="#BBDFFF"/>
+                                        <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#3399FF"/>
+                                    </DataTrigger>
                                     <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
                                         <Setter TargetName="ItemBorder" Property="Background" Value="#FFC400"/>
                                     </DataTrigger>
@@ -87,6 +96,22 @@
 
                 <TextBlock x:Name="HoverInfoText" Margin="0,4,0,0" FontStyle="Italic"
                            Text=" " Foreground="#555555"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Podmiana aminokwasu: dziala na reszcie zaznaczonej klikniectem w sekwencji powyzej -->
+        <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1"
+                Background="#F5F5F5" Padding="8">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Wybrana reszta: " VerticalAlignment="Center" FontWeight="SemiBold"/>
+                <TextBlock x:Name="SelectedResidueText" Text="brak (kliknij literę w sekwencji)"
+                           VerticalAlignment="Center" Margin="0,0,20,0"/>
+
+                <TextBlock Text="Zamień na:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <ComboBox x:Name="MutateCombo" Width="190" VerticalAlignment="Center"/>
+
+                <Button x:Name="MutateButton" Content="Podmień aminokwas" Margin="8,0,0,0" Padding="8,4"
+                        Click="MutateButton_Click" IsEnabled="False"/>
             </StackPanel>
         </Border>
 

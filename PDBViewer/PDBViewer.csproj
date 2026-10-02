@@ -16,4 +16,10 @@
     <ProjectReference Include="..\PDBLibrary\PDBLibrary.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Update="ResidueSequenceItem.cs">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Compile>
+  </ItemGroup>
+
 </Project>

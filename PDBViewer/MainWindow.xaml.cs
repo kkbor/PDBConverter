@@ -2,6 +2,7 @@
 using Microsoft.Win32;
 using PDBLibrary.Models;
 using PDBLibrary.Parsers;
+using PDBLibrary.Srevices;
 using PDBViewer.Vizualization;
 using System.Collections.ObjectModel;
 using System.Text;
@@ -31,6 +32,10 @@ namespace PDBViewer
 
         private Residues? _highlightedResidue;
 
+        // reszta i element sekwencji aktualnie ZAZNACZONE klikniectem (do podmiany)
+        private Residues? _selectedResidue;
+        private ResidueSequenceItem? _selectedItem;
+
         // dane dla wirtualizowanego ItemsControl (sekwencja aminokwasow)
         private readonly ObservableCollection<ResidueSequenceItem> _sequenceItems = new();
 
@@ -38,6 +43,20 @@ namespace PDBViewer
         {
             InitializeComponent();
             SequenceItemsControl.ItemsSource = _sequenceItems;
+            PopulateMutateCombo();
+        }
+
+        private void PopulateMutateCombo()
+        {
+            foreach (var (code, name) in AminoAcidCodes.StandardAminoAcids)
+            {
+                MutateCombo.Items.Add(new ComboBoxItem
+                {
+                    Content = $"{code} - {name}",
+                    Tag = code
+                });
+            }
+            MutateCombo.SelectedIndex = 0;
         }
 
         private void OpenButton_Click(object sender, RoutedEventArgs e)
@@ -62,6 +81,9 @@ namespace PDBViewer
                 InfoText.Text = $"Łańcuchów: {_protein.Chains.Count}, " +
                                  $"reszt: {residueCount}, atomów: {atomCount}";
 
+                SaveButton.IsEnabled = true;
+                ClearSelection();
+
                 RenderProtein();
                 BuildSequencePanel();
             }
@@ -72,12 +94,38 @@ namespace PDBViewer
             }
         }
 
+        private void SaveButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_protein == null)
+                return;
+
+            var dialog = new SaveFileDialog
+            {
+                Filter = "Pliki PDB (*.pdb)|*.pdb|Wszystkie pliki (*.*)|*.*",
+                Title = "Zapisz plik PDB",
+                FileName = "structure.pdb"
+            };
+
+            if (dialog.ShowDialog() != true)
+                return;
+
+            try
+            {
+                PdbWriter.Save(_protein, dialog.FileName);
+                MessageBox.Show("Plik PDB zapisany pomyślnie.", "Zapisano",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Błąd zapisu pliku PDB:\n{ex.Message}",
+                    "Błąd", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private void StyleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_protein != null)
-            {
                 RenderProtein();
-            }
         }
 
         private void RenderProtein()
@@ -94,11 +142,16 @@ namespace PDBViewer
 
             VisualizationResult result = _visualizer.BuildWithMapping(_protein, style);
 
-            ProteinModelVisual.Content = result.Model; // scalony, zamrozony model - budowany raz
+            ProteinModelVisual.Content = result.Model; // scalony, zamrozony model
             _residueInfo = result.ResidueInfo;
 
             HighlightModelVisual.Content = null;
             _highlightedResidue = null;
+
+            // jesli jakas reszta byla zaznaczona, po przebudowie geometrii
+            // pokaz jej podswietlenie ponownie (ta sama instancja Residues przetrwala)
+            if (_selectedResidue != null && _residueInfo.TryGetValue(_selectedResidue, out var info))
+                HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
 
             Viewport.ZoomExtents();
         }
@@ -131,20 +184,61 @@ namespace PDBViewer
         // poprawnie takze po recyklingu kontenera przez wirtualizacje.
         private void SequenceItem_MouseEnter(object sender, MouseEventArgs e)
         {
-            if (sender is FrameworkElement fe && fe.DataContext is ResidueSequenceItem item
-                && !item.IsLabel && item.Residue != null)
-            {
+            if (TryGetResidueItem(sender, out var item))
                 HighlightResidue(item);
-            }
         }
 
         private void SequenceItem_MouseLeave(object sender, MouseEventArgs e)
         {
-            if (sender is FrameworkElement fe && fe.DataContext is ResidueSequenceItem item
-                && !item.IsLabel && item.Residue != null)
+            if (TryGetResidueItem(sender, out var item))
+                ClearHoverHighlight(item);
+        }
+
+        private void SequenceItem_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (TryGetResidueItem(sender, out var item))
+                SelectResidue(item);
+        }
+
+        private static bool TryGetResidueItem(object sender, out ResidueSequenceItem item)
+        {
+            if (sender is FrameworkElement fe && fe.DataContext is ResidueSequenceItem seqItem
+                && !seqItem.IsLabel && seqItem.Residue != null)
             {
-                ClearHighlight(item);
+                item = seqItem;
+                return true;
             }
+
+            item = null!;
+            return false;
+        }
+
+        private void SelectResidue(ResidueSequenceItem item)
+        {
+            if (_selectedItem != null)
+                _selectedItem.IsSelected = false;
+
+            _selectedItem = item;
+            _selectedResidue = item.Residue;
+            item.IsSelected = true;
+
+            SelectedResidueText.Text = $"{item.Residue!.Name} {item.Residue.Id}";
+            MutateButton.IsEnabled = true;
+
+            // od razu pokaz podswietlenie w 3D (niezaleznie od hover)
+            if (_residueInfo.TryGetValue(item.Residue, out var info))
+                HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
+        }
+
+        private void ClearSelection()
+        {
+            if (_selectedItem != null)
+                _selectedItem.IsSelected = false;
+
+            _selectedItem = null;
+            _selectedResidue = null;
+            SelectedResidueText.Text = "brak (kliknij literę w sekwencji)";
+            MutateButton.IsEnabled = false;
         }
 
         private void HighlightResidue(ResidueSequenceItem item)
@@ -157,15 +251,13 @@ namespace PDBViewer
 
             HoverInfoText.Text = $"{item.Residue.Name} {item.Residue.Id}";
 
-            // Nie dotykamy glownego (zamrozonego) modelu. Budujemy osobny,
-            // bardzo maly model tylko dla atomow/wiazan tej jednej reszty.
             if (_residueInfo.TryGetValue(item.Residue, out var info))
-            {
                 HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
-            }
         }
 
-        private void ClearHighlight(ResidueSequenceItem item)
+        // Po zjechaniu mysza z litery: wracamy do podswietlenia ZAZNACZONEJ reszty
+        // (jesli jakas jest zaznaczona), albo czyscimy overlay calkowicie.
+        private void ClearHoverHighlight(ResidueSequenceItem item)
         {
             item.IsHighlighted = false;
 
@@ -173,8 +265,46 @@ namespace PDBViewer
             {
                 HoverInfoText.Text = " ";
                 _highlightedResidue = null;
+            }
+
+            if (_selectedResidue != null && _residueInfo.TryGetValue(_selectedResidue, out var info))
+            {
+                HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
+            }
+            else
+            {
                 HighlightModelVisual.Content = null;
             }
+        }
+
+        private void MutateButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selectedResidue == null || _selectedItem == null)
+                return;
+
+            if (MutateCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not string newCode)
+                return;
+
+            string oldName = _selectedResidue.Name;
+
+            ResidueMutator.Mutate(_selectedResidue, newCode);
+
+            // odswiez litere/tooltip w panelu sekwencji bez przebudowy calej listy
+            _selectedItem.RefreshFromResidue();
+
+            // szkielet atomow sie zmienil (usuniete atomy lancucha bocznego) ->
+            // trzeba przebudowac geometrie 3D (wiazania, grupowanie po pierwiastku itd.)
+            RenderProtein();
+
+            SelectedResidueText.Text = $"{_selectedResidue.Name} {_selectedResidue.Id}";
+
+            MessageBox.Show(
+                $"Zamieniono {oldName} → {_selectedResidue.Name} (reszta {_selectedResidue.Id}).\n\n" +
+                "Uwaga: na tym etapie łańcuch boczny nowego aminokwasu nie jest " +
+                "dobudowywany geometrycznie - zachowany został tylko szkielet " +
+                "(i Cβ, jeśli występuje). Pełna rekonstrukcja łańcucha bocznego " +
+                "to kolejny krok.",
+                "Podmieniono aminokwas", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 }
