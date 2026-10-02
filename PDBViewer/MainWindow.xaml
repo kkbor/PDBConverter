@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:h="http://helix-toolkit.org/wpf"
+        xmlns:local="clr-namespace:PDBViewer"
         Title="PDB Editor - Wizualizacja 3D" Height="720" Width="1080">
 
     <DockPanel>
@@ -20,6 +21,75 @@
             </ComboBox>
         </StackPanel>
 
+        <!-- Panel sekwencji aminokwasow - wirtualizowany, jeden poziomy, przewijalny pasek -->
+        <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="0,1,0,1"
+                Background="#FAFAFA" Padding="8">
+            <StackPanel>
+                <TextBlock x:Name="SequenceHeaderText" Text="Sekwencja: -" FontWeight="Bold" Margin="0,0,0,4"/>
+
+                <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled"
+                              CanContentScroll="True"
+                              Height="40">
+                    <ItemsControl x:Name="SequenceItemsControl"
+                                  VirtualizingPanel.IsVirtualizing="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                  VirtualizingPanel.ScrollUnit="Pixel"
+                                  ScrollViewer.CanContentScroll="True">
+
+                        <!-- To jest sedno optymalizacji: VirtualizingStackPanel zamiast WrapPanel.
+                             WPF tworzy kontenery tylko dla elementow aktualnie widocznych
+                             (+ maly bufor), a przy przewijaniu je RECYKLINGUJE zamiast
+                             tworzyc nowe. Dla bialka z 5000 reszt w pamieci zyje w danym
+                             momencie np. ~100 kontenerow, a nie 5000. -->
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+
+                        <!-- EventSetter dziala poprawnie takze po recyklingu kontenera,
+                             bo jest czescia stylu szablonu, nie referencja do konkretnego
+                             obiektu utworzonego raz w kodzie. -->
+                        <ItemsControl.ItemContainerStyle>
+                            <Style TargetType="ContentPresenter">
+                                <EventSetter Event="MouseEnter" Handler="SequenceItem_MouseEnter"/>
+                                <EventSetter Event="MouseLeave" Handler="SequenceItem_MouseLeave"/>
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
+
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type local:ResidueSequenceItem}">
+                                <Border x:Name="ItemBorder"
+                                        BorderBrush="#E6E6E6" BorderThickness="1" CornerRadius="3"
+                                        Margin="1" Padding="4,1,4,1" Background="White"
+                                        Cursor="Hand" ToolTip="{Binding Tooltip}">
+                                    <TextBlock Text="{Binding Letter}" FontFamily="Consolas" FontSize="14"/>
+                                </Border>
+
+                                <DataTemplate.Triggers>
+                                    <!-- Stan podswietlenia trzymany jest w DANYCH (IsHighlighted),
+                                         nie w konkretnym elemencie UI - dzieki temu dziala
+                                         poprawnie mimo recyklingu kontenerow. -->
+                                    <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                        <Setter TargetName="ItemBorder" Property="Background" Value="#FFC400"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsLabel}" Value="True">
+                                        <Setter TargetName="ItemBorder" Property="BorderThickness" Value="0"/>
+                                        <Setter TargetName="ItemBorder" Property="Background" Value="Transparent"/>
+                                        <Setter TargetName="ItemBorder" Property="Cursor" Value="Arrow"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <TextBlock x:Name="HoverInfoText" Margin="0,4,0,0" FontStyle="Italic"
+                           Text=" " Foreground="#555555"/>
+            </StackPanel>
+        </Border>
+
         <h:HelixViewport3D x:Name="Viewport" DockPanel.Dock="Bottom"
                             ZoomExtentsWhenLoaded="True"
                             ShowCoordinateSystem="True"
@@ -30,7 +100,13 @@
 
             <h:SunLight/>
 
+            <!-- Scalony, zamrozony (Freeze) model calego bialka - nigdy nie modyfikowany
+                 po zbudowaniu, co jest kluczowe dla wydajnosci przy duzych strukturach. -->
             <ModelVisual3D x:Name="ProteinModelVisual"/>
+
+            <!-- Osobna, bardzo lekka warstwa tylko na podswietlenie aktualnie
+                 najechanej reszty - podmieniana w calosci przy kazdym hover. -->
+            <ModelVisual3D x:Name="HighlightModelVisual"/>
 
         </h:HelixViewport3D>
 
