@@ -52,32 +52,7 @@ namespace PDBLibrary.Parsers
                        : string.Empty
                 };
 
-                Chains? chain = protein.Chains.FirstOrDefault(c => c.Id == atom.ChainId);
-
-                if (chain == null)
-                {
-                    chain = new Chains
-                    {
-                        Id = atom.ChainId
-                    };
-
-                    protein.Chains.Add(chain);
-                }
-
-                Residues? residue = chain.Residues.FirstOrDefault(r => r.Id == atom.ResidueId);
-
-                if (residue == null)
-                {
-                    residue = new Residues
-                    {
-                        Id = atom.ResidueId,
-                        Name = atom.ResidueName
-                    };
-
-                    chain.Residues.Add(residue);
-                }
-
-                residue.Atoms.Add(atom);
+                ProteinBuilder.AddAtom(protein, atom);
             }
 
             return protein;

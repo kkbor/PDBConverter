@@ -39,6 +39,14 @@ namespace PDBViewer
         // dane dla wirtualizowanego ItemsControl (sekwencja aminokwasow)
         private readonly ObservableCollection<ResidueSequenceItem> _sequenceItems = new();
 
+        // szybki dostep reszta -> jej "literka" w panelu sekwencji (do synchronizacji 3D <-> sekwencja)
+        private readonly Dictionary<Residues, ResidueSequenceItem> _sequenceItemByResidue = new();
+
+        // cache do hit-testingu w 3D: plaska lista atomow + atom -> jego reszta.
+        // Odbudowywane przy kazdym RenderProtein() (geometria/atomy moga sie zmienic po mutacji).
+        private List<Atoms> _allAtomsCache = new();
+        private Dictionary<Atoms, Residues> _atomToResidue = new();
+
         public MainWindow()
         {
             InitializeComponent();
@@ -63,8 +71,11 @@ namespace PDBViewer
         {
             var dialog = new OpenFileDialog
             {
-                Filter = "Pliki PDB (*.pdb)|*.pdb|Wszystkie pliki (*.*)|*.*",
-                Title = "Wybierz plik PDB"
+                Filter = "Pliki struktur (*.pdb;*.ent;*.cif;*.mmcif)|*.pdb;*.ent;*.cif;*.mmcif|" +
+                         "Pliki PDB (*.pdb;*.ent)|*.pdb;*.ent|" +
+                         "Pliki mmCIF (*.cif;*.mmcif)|*.cif;*.mmcif|" +
+                         "Wszystkie pliki (*.*)|*.*",
+                Title = "Wybierz plik struktury"
             };
 
             if (dialog.ShowDialog() != true)
@@ -72,8 +83,8 @@ namespace PDBViewer
 
             try
             {
-                var parser = new PdbParsers();
-                _protein = parser.Load(dialog.FileName);
+                // wybor parsera (PDB vs mmCIF) nastepuje automatycznie wg rozszerzenia/tresci
+                _protein = StructureFileLoader.Load(dialog.FileName);
 
                 int atomCount = _protein.Chains.Sum(c => c.Residues.Sum(r => r.Atoms.Count));
                 int residueCount = _protein.Chains.Sum(c => c.Residues.Count);
@@ -101,8 +112,8 @@ namespace PDBViewer
 
             var dialog = new SaveFileDialog
             {
-                Filter = "Pliki PDB (*.pdb)|*.pdb|Wszystkie pliki (*.*)|*.*",
-                Title = "Zapisz plik PDB",
+                Filter = "Plik PDB (*.pdb)|*.pdb|Plik mmCIF (*.cif)|*.cif",
+                Title = "Zapisz plik struktury",
                 FileName = "structure.pdb"
             };
 
@@ -111,8 +122,14 @@ namespace PDBViewer
 
             try
             {
-                PdbWriter.Save(_protein, dialog.FileName);
-                MessageBox.Show("Plik PDB zapisany pomyślnie.", "Zapisano",
+                string ext = System.IO.Path.GetExtension(dialog.FileName).ToLowerInvariant();
+
+                if (ext == ".cif" || ext == ".mmcif")
+                    MmcifWriter.Save(_protein, dialog.FileName);
+                else
+                    PdbWriter.Save(_protein, dialog.FileName);
+
+                MessageBox.Show("Plik zapisany pomyślnie.", "Zapisano",
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
@@ -145,6 +162,8 @@ namespace PDBViewer
             ProteinModelVisual.Content = result.Model; // scalony, zamrozony model
             _residueInfo = result.ResidueInfo;
 
+            RebuildHitTestCaches();
+
             HighlightModelVisual.Content = null;
             _highlightedResidue = null;
 
@@ -156,9 +175,27 @@ namespace PDBViewer
             Viewport.ZoomExtents();
         }
 
+        // Plaska lista atomow + atom->reszta, uzywane przy klikaniu/najezdzaniu na model 3D
+        // (znajdujemy najblizszy atom do punktu trafienia promienia, a potem jego reszte).
+        private void RebuildHitTestCaches()
+        {
+            _allAtomsCache = new List<Atoms>();
+            _atomToResidue = new Dictionary<Atoms, Residues>();
+
+            foreach (var pair in _residueInfo)
+            {
+                foreach (var atom in pair.Value.Atoms)
+                {
+                    _allAtomsCache.Add(atom);
+                    _atomToResidue[atom] = pair.Key;
+                }
+            }
+        }
+
         private void BuildSequencePanel()
         {
             _sequenceItems.Clear();
+            _sequenceItemByResidue.Clear();
             _highlightedResidue = null;
 
             if (_protein == null)
@@ -175,7 +212,9 @@ namespace PDBViewer
 
                 foreach (var residue in chain.Residues.OrderBy(r => r.Id))
                 {
-                    _sequenceItems.Add(new ResidueSequenceItem(chain, residue));
+                    var item = new ResidueSequenceItem(chain, residue);
+                    _sequenceItems.Add(item);
+                    _sequenceItemByResidue[residue] = item;
                 }
             }
         }
@@ -185,19 +224,19 @@ namespace PDBViewer
         private void SequenceItem_MouseEnter(object sender, MouseEventArgs e)
         {
             if (TryGetResidueItem(sender, out var item))
-                HighlightResidue(item);
+                SetHoveredResidue(item.Residue);
         }
 
         private void SequenceItem_MouseLeave(object sender, MouseEventArgs e)
         {
-            if (TryGetResidueItem(sender, out var item))
-                ClearHoverHighlight(item);
+            if (TryGetResidueItem(sender, out var item) && _highlightedResidue == item.Residue)
+                SetHoveredResidue(null);
         }
 
         private void SequenceItem_Click(object sender, MouseButtonEventArgs e)
         {
-            if (TryGetResidueItem(sender, out var item))
-                SelectResidue(item);
+            if (TryGetResidueItem(sender, out var item) && item.Residue != null)
+                SelectResidue(item.Residue);
         }
 
         private static bool TryGetResidueItem(object sender, out ResidueSequenceItem item)
@@ -213,20 +252,97 @@ namespace PDBViewer
             return false;
         }
 
-        private void SelectResidue(ResidueSequenceItem item)
+        // --- Najechanie/klikniecie bezposrednio na model 3D ---
+
+        private void Viewport_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_protein == null)
+                return;
+
+            var residue = HitTestResidue(e.GetPosition(Viewport));
+            Viewport.Cursor = residue != null ? Cursors.Hand : Cursors.Arrow;
+            SetHoveredResidue(residue);
+        }
+
+        private void Viewport_MouseLeave(object sender, MouseEventArgs e)
+        {
+            Viewport.Cursor = Cursors.Arrow;
+            SetHoveredResidue(null);
+        }
+
+        private void Viewport_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_protein == null)
+                return;
+
+            var residue = HitTestResidue(e.GetPosition(Viewport));
+            if (residue != null)
+                SelectResidue(residue);
+        }
+
+        // Standardowy WPF 3D hit-test: VisualTreeHelper.HitTest wykonuje raycasting
+        // przez zawartosc Viewport3D i zwraca RayMeshGeometry3DHitTestResult z
+        // dokladnym punktem trafienia (PointHit) na powierzchni mesha. Poniewaz
+        // nie stosujemy zadnego Transform3D przy budowie geometrii (wspolrzedne
+        // kul/walcow sa budowane bezposrednio w ukladzie bialka), PointHit od razu
+        // odpowiada rzeczywistym wspolrzednym w strukturze - wystarczy znalezc
+        // najblizszy atom.
+        private Residues? HitTestResidue(Point mousePosition)
+        {
+            var hitResult = VisualTreeHelper.HitTest(Viewport, mousePosition);
+
+            if (hitResult is not RayMeshGeometry3DHitTestResult meshHit)
+                return null;
+
+            return FindNearestResidue(meshHit.PointHit);
+        }
+
+        // Poniewaz geometria jest scalona (jeden mesh na pierwiastek/wiazania dla
+        // wydajnosci), nie da sie bezposrednio odczytac "ktory to byl atom" z
+        // wyniku hit-testu - zamiast tego szukamy atomu najblizszego punktowi
+        // trafienia. Prosty skan liniowy - dla pojedynczego klikniecia/ruchu myszy
+        // to tanie, nawet przy duzych strukturach (porownanie odleglosci, bez
+        // pierwiastkowania - uzywamy kwadratu odleglosci).
+        private Residues? FindNearestResidue(Point3D hitPoint)
+        {
+            Atoms? nearest = null;
+            double bestDistSq = double.MaxValue;
+
+            foreach (var atom in _allAtomsCache)
+            {
+                double dx = atom.X - hitPoint.X;
+                double dy = atom.Y - hitPoint.Y;
+                double dz = atom.Z - hitPoint.Z;
+                double distSq = dx * dx + dy * dy + dz * dz;
+
+                if (distSq < bestDistSq)
+                {
+                    bestDistSq = distSq;
+                    nearest = atom;
+                }
+            }
+
+            return nearest != null && _atomToResidue.TryGetValue(nearest, out var residue) ? residue : null;
+        }
+
+        // --- Wspolna logika zaznaczania/podswietlania, uzywana zarowno przez
+        //     panel sekwencji, jak i przez model 3D ---
+
+        private void SelectResidue(Residues residue)
         {
             if (_selectedItem != null)
                 _selectedItem.IsSelected = false;
 
-            _selectedItem = item;
-            _selectedResidue = item.Residue;
-            item.IsSelected = true;
+            _selectedItem = _sequenceItemByResidue.TryGetValue(residue, out var item) ? item : null;
+            if (_selectedItem != null)
+                _selectedItem.IsSelected = true;
 
-            SelectedResidueText.Text = $"{item.Residue!.Name} {item.Residue.Id}";
+            _selectedResidue = residue;
+            SelectedResidueText.Text = $"{residue.Name} {residue.Id}";
             MutateButton.IsEnabled = true;
 
             // od razu pokaz podswietlenie w 3D (niezaleznie od hover)
-            if (_residueInfo.TryGetValue(item.Residue, out var info))
+            if (_residueInfo.TryGetValue(residue, out var info))
                 HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
         }
 
@@ -237,44 +353,43 @@ namespace PDBViewer
 
             _selectedItem = null;
             _selectedResidue = null;
-            SelectedResidueText.Text = "brak (kliknij literę w sekwencji)";
+            SelectedResidueText.Text = "brak (kliknij literę w sekwencji lub model 3D)";
             MutateButton.IsEnabled = false;
         }
 
-        private void HighlightResidue(ResidueSequenceItem item)
+        // Centralny punkt stanu "najechania" - dziala identycznie niezaleznie od
+        // tego, czy zrodlem jest hover nad litera w sekwencji, czy nad atomem w 3D.
+        // Synchronizuje oba widoki: podswietla literke ORAZ model 3D jednoczesnie.
+        private void SetHoveredResidue(Residues? residue)
         {
-            if (item.Residue == null)
+            if (_highlightedResidue == residue)
                 return;
 
-            _highlightedResidue = item.Residue;
-            item.IsHighlighted = true;
+            if (_highlightedResidue != null && _sequenceItemByResidue.TryGetValue(_highlightedResidue, out var prevItem))
+                prevItem.IsHighlighted = false;
 
-            HoverInfoText.Text = $"{item.Residue.Name} {item.Residue.Id}";
+            _highlightedResidue = residue;
 
-            if (_residueInfo.TryGetValue(item.Residue, out var info))
-                HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
-        }
-
-        // Po zjechaniu mysza z litery: wracamy do podswietlenia ZAZNACZONEJ reszty
-        // (jesli jakas jest zaznaczona), albo czyscimy overlay calkowicie.
-        private void ClearHoverHighlight(ResidueSequenceItem item)
-        {
-            item.IsHighlighted = false;
-
-            if (_highlightedResidue == item.Residue)
+            if (residue != null)
             {
-                HoverInfoText.Text = " ";
-                _highlightedResidue = null;
+                if (_sequenceItemByResidue.TryGetValue(residue, out var item))
+                    item.IsHighlighted = true;
+
+                HoverInfoText.Text = $"{residue.Name} {residue.Id}";
+
+                if (_residueInfo.TryGetValue(residue, out var info))
+                    HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
+
+                return;
             }
 
-            if (_selectedResidue != null && _residueInfo.TryGetValue(_selectedResidue, out var info))
-            {
-                HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
-            }
+            HoverInfoText.Text = " ";
+
+            // po zjechaniu wracamy do podswietlenia ZAZNACZONEJ reszty, jesli jakas jest
+            if (_selectedResidue != null && _residueInfo.TryGetValue(_selectedResidue, out var selInfo))
+                HighlightModelVisual.Content = _visualizer.BuildHighlightModel(selInfo);
             else
-            {
                 HighlightModelVisual.Content = null;
-            }
         }
 
         private void MutateButton_Click(object sender, RoutedEventArgs e)

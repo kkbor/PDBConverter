@@ -104,7 +104,7 @@
                 Background="#F5F5F5" Padding="8">
             <StackPanel Orientation="Horizontal">
                 <TextBlock Text="Wybrana reszta: " VerticalAlignment="Center" FontWeight="SemiBold"/>
-                <TextBlock x:Name="SelectedResidueText" Text="brak (kliknij literę w sekwencji)"
+                <TextBlock x:Name="SelectedResidueText" Text="brak (kliknij literę w sekwencji lub model 3D)"
                            VerticalAlignment="Center" Margin="0,0,20,0"/>
 
                 <TextBlock Text="Zamień na:" VerticalAlignment="Center" Margin="0,0,4,0"/>
@@ -118,7 +118,10 @@
         <h:HelixViewport3D x:Name="Viewport" DockPanel.Dock="Bottom"
                             ZoomExtentsWhenLoaded="True"
                             ShowCoordinateSystem="True"
-                            ShowViewCube="True">
+                            ShowViewCube="True"
+                            MouseMove="Viewport_MouseMove"
+                            MouseLeave="Viewport_MouseLeave"
+                            MouseLeftButtonUp="Viewport_MouseLeftButtonUp">
             <h:HelixViewport3D.DefaultCamera>
                 <PerspectiveCamera Position="0,0,50" LookDirection="0,0,-1" UpDirection="0,1,0"/>
             </h:HelixViewport3D.DefaultCamera>
