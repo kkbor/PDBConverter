@@ -31,17 +31,24 @@ namespace PDBLibrary.Parsers
         {
             using var writer = new StreamWriter(path, false, Encoding.ASCII);
 
+            // Numery seryjne atomow sa NADAWANE NA NOWO, sekwencyjnie, przy kazdym
+            // zapisie - nie polegamy na atom.Id z pliku wejsciowego. Jest to konieczne,
+            // bo po mutacji (SideChainBuilder dokleja nowe atomy, numerujac je lokalnie
+            // w obrebie reszty) stare numery moglyby sie powielac miedzy roznymi resztami.
+            int serial = 1;
+
             foreach (var chain in protein.Chains)
             {
-                Atoms? lastAtom = null;
+                int lastSerial = serial;
                 Residues? lastResidue = null;
 
                 foreach (var residue in chain.Residues.OrderBy(r => r.Id))
                 {
                     foreach (var atom in residue.Atoms)
                     {
-                        writer.WriteLine(FormatAtomLine(atom, chain.Id, residue));
-                        lastAtom = atom;
+                        writer.WriteLine(FormatAtomLine(atom, serial, chain.Id, residue));
+                        lastSerial = serial;
+                        serial++;
                     }
 
                     lastResidue = residue;
@@ -49,19 +56,19 @@ namespace PDBLibrary.Parsers
 
                 // TER jest opcjonalny dla naszego wlasnego parsera (czyta tylko
                 // ATOM/HETATM), ale dobra praktyka dla zgodnosci z innymi narzedziami
-                if (lastAtom != null && lastResidue != null)
-                    writer.WriteLine(FormatTerLine(lastAtom.Id + 1, chain.Id, lastResidue));
+                if (lastResidue != null)
+                    writer.WriteLine(FormatTerLine(lastSerial + 1, chain.Id, lastResidue));
             }
 
             writer.WriteLine("END");
         }
 
-        private static string FormatAtomLine(Atoms atom, char chainId, Residues residue)
+        private static string FormatAtomLine(Atoms atom, int serial, char chainId, Residues residue)
         {
             var sb = new StringBuilder();
 
             sb.Append("ATOM  ");                                        // 1-6
-            sb.Append(atom.Id.ToString(CultureInfo.InvariantCulture).PadLeft(5)); // 7-11
+            sb.Append(serial.ToString(CultureInfo.InvariantCulture).PadLeft(5)); // 7-11
             sb.Append(' ');                                              // 12
             sb.Append(FormatAtomName(atom.Name));                        // 13-16
             sb.Append(' ');                                              // 17 (altLoc)

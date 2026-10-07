@@ -401,9 +401,9 @@ namespace PDBViewer
                 return;
 
             string oldName = _selectedResidue.Name;
-
+         
             ResidueMutator.Mutate(_selectedResidue, newCode);
-
+           
             // odswiez litere/tooltip w panelu sekwencji bez przebudowy calej listy
             _selectedItem.RefreshFromResidue();
 
@@ -414,12 +414,11 @@ namespace PDBViewer
             SelectedResidueText.Text = $"{_selectedResidue.Name} {_selectedResidue.Id}";
 
             MessageBox.Show(
-                $"Zamieniono {oldName} → {_selectedResidue.Name} (reszta {_selectedResidue.Id}).\n\n" +
-                "Uwaga: na tym etapie łańcuch boczny nowego aminokwasu nie jest " +
-                "dobudowywany geometrycznie - zachowany został tylko szkielet " +
-                "(i Cβ, jeśli występuje). Pełna rekonstrukcja łańcucha bocznego " +
-                "to kolejny krok.",
-                "Podmieniono aminokwas", MessageBoxButton.OK, MessageBoxImage.Information);
+                $"Zamieniono {oldName} → {_selectedResidue.Name} " +
+                $"(reszta {_selectedResidue.Id}).",
+                "Podmieniono aminokwas",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
         }
     }
 }
