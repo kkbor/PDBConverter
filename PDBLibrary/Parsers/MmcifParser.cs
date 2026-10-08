@@ -69,33 +69,50 @@ namespace PDBLibrary.Parsers
             return protein;
         }
 
-        private static void ParseAtomSiteLoop(Protein protein, string[] lines, ref int i, List<string> columns)
+        private static void ParseAtomSiteLoop(
+            Protein protein,
+            string[] lines,
+            ref int i,
+            List<string> columns)
         {
-            var colIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var colIndex =  new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
             for (int c = 0; c < columns.Count; c++)
             {
                 const string prefix = "_atom_site.";
+
                 string name = columns[c].StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                    ? columns[c].Substring(prefix.Length)
-                    : columns[c];
+                        ? columns[c].Substring(prefix.Length)
+                        : columns[c];
+
                 colIndex[name] = c;
             }
 
             int idxGroup = GetIndex(colIndex, "group_PDB");
             int idxSerial = GetIndex(colIndex, "id");
-            // auth_* odpowiada "tradycyjnej" numeracji PDB (ta, ktora widac w
-            // narzedziach wizualizacyjnych); label_* to wewnetrzna numeracja mmCIF -
-            // preferujemy auth_*, bo to ona jest spojna z legacy PDB
+
             int idxAtomName = GetIndex(colIndex, "auth_atom_id", "label_atom_id");
+
             int idxResName = GetIndex(colIndex, "auth_comp_id", "label_comp_id");
+
             int idxChain = GetIndex(colIndex, "auth_asym_id", "label_asym_id");
+
             int idxResSeq = GetIndex(colIndex, "auth_seq_id", "label_seq_id");
+
             int idxX = GetIndex(colIndex, "Cartn_x");
             int idxY = GetIndex(colIndex, "Cartn_y");
             int idxZ = GetIndex(colIndex, "Cartn_z");
+
             int idxOcc = GetIndex(colIndex, "occupancy");
             int idxBFactor = GetIndex(colIndex, "B_iso_or_equiv");
+
             int idxElement = GetIndex(colIndex, "type_symbol");
+            int idxInsCode = GetIndex(colIndex, "pdbx_PDB_ins_code");
+
+            // Alternatywna lokalizacja atomu.
+            int idxAltLoc = GetIndex(colIndex, "label_alt_id");
+
+            int alternateLocationCount = 0;
 
             while (i < lines.Length && IsLoopDataRow(lines[i]))
             {
@@ -103,36 +120,100 @@ namespace PDBLibrary.Parsers
                 i++;
 
                 if (tokens.Count < columns.Count)
-                    continue; // niekompletny/uszkodzony wiersz - pomijamy
+                    continue;
 
-                string group = idxGroup >= 0 ? tokens[idxGroup] : "ATOM";
-                bool isAtomRecord =
-                    group.Equals("ATOM", StringComparison.OrdinalIgnoreCase) ||
+                string group = idxGroup >= 0
+                        ? tokens[idxGroup]
+                        : "ATOM";
+
+                bool isAtomRecord = group.Equals( "ATOM", StringComparison.OrdinalIgnoreCase) ||
                     group.Equals("HETATM", StringComparison.OrdinalIgnoreCase);
 
                 if (!isAtomRecord)
                     continue;
 
-                string chainToken = idxChain >= 0 ? CleanToken(tokens[idxChain]) : "A";
-                char chainId = chainToken.Length > 0 ? chainToken[0] : 'A';
+                string chainToken = idxChain >= 0
+                        ? CleanToken(tokens[idxChain])
+                        : "A";
+
+                char chainId = chainToken.Length > 0
+                        ? chainToken[0]
+                        : 'A';
+
+                string insCodeToken = idxInsCode >= 0
+                        ? CleanToken(tokens[idxInsCode])
+                        : string.Empty;
+
+                char insertionCode = insCodeToken.Length > 0
+                        ? insCodeToken[0]
+                        : ' ';
+
+                // Alternate location
+                string altLocToken = idxAltLoc >= 0
+                        ? CleanToken(tokens[idxAltLoc])
+                        : string.Empty;
+
+                char altLoc = altLocToken.Length > 0
+                        ? altLocToken[0]
+                        : ' ';
+
+                if (altLoc != ' ')
+                {
+                    alternateLocationCount++;
+                }
 
                 var atom = new Atoms
                 {
-                    Id = idxSerial >= 0 ? ParseIntSafe(tokens[idxSerial]) : 0,
-                    Name = idxAtomName >= 0 ? CleanToken(tokens[idxAtomName]) : string.Empty,
-                    ResidueName = idxResName >= 0 ? CleanToken(tokens[idxResName]) : string.Empty,
+                    Id = idxSerial >= 0
+                            ? ParseIntSafe(tokens[idxSerial])
+                            : 0,
+
+                    Name = idxAtomName >= 0
+                            ? CleanToken(tokens[idxAtomName])
+                            : string.Empty,
+
+                    ResidueName = idxResName >= 0
+                            ? CleanToken(tokens[idxResName])
+                            : string.Empty,
+
                     ChainId = chainId,
-                    ResidueId = idxResSeq >= 0 ? ParseIntSafe(tokens[idxResSeq]) : 0,
-                    X = idxX >= 0 ? ParseDoubleSafe(tokens[idxX]) : 0.0,
-                    Y = idxY >= 0 ? ParseDoubleSafe(tokens[idxY]) : 0.0,
-                    Z = idxZ >= 0 ? ParseDoubleSafe(tokens[idxZ]) : 0.0,
-                    Occupancy = idxOcc >= 0 ? ParseDoubleSafe(tokens[idxOcc], 1.0) : 1.0,
-                    BFactor = idxBFactor >= 0 ? ParseDoubleSafe(tokens[idxBFactor], 0.0) : 0.0,
-                    Element = idxElement >= 0 ? CleanToken(tokens[idxElement]) : string.Empty
+
+                    ResidueId = idxResSeq >= 0
+                            ? ParseIntSafe(tokens[idxResSeq])
+                            : 0,
+
+                    InsertionCode = insertionCode,
+
+                    X = idxX >= 0
+                            ? ParseDoubleSafe(tokens[idxX])
+                            : 0.0,
+
+                    Y = idxY >= 0
+                            ? ParseDoubleSafe(tokens[idxY])
+                            : 0.0,
+
+                    Z = idxZ >= 0
+                            ? ParseDoubleSafe(tokens[idxZ])
+                            : 0.0,
+
+                    Occupancy = idxOcc >= 0
+                            ? ParseDoubleSafe(tokens[idxOcc], 1.0)
+                            : 1.0,
+
+                    BFactor = idxBFactor >= 0
+                            ? ParseDoubleSafe(tokens[idxBFactor], 0.0)
+                            : 0.0,
+
+                    Element = idxElement >= 0
+                            ? CleanToken(tokens[idxElement])
+                            : string.Empty
                 };
 
                 ProteinBuilder.AddAtom(protein, atom);
             }
+
+            Console.WriteLine(
+                $"Atomy z altLoc w mmCIF: {alternateLocationCount}");
         }
 
         private static int GetIndex(Dictionary<string, int> map, params string[] candidateNames)

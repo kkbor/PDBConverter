@@ -19,5 +19,6 @@ namespace PDBLibrary.Models
         public double Occupancy { get; set; }
         public double BFactor { get; set; }
         public string? Element { get; set; }
+        public char InsertionCode { get; set; } = ' ';
     }
 }

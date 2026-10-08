@@ -39,10 +39,23 @@ namespace PDBLibrary.Models
                 : 'X';
         }
 
+        /// <summary>
+        /// Sprawdza, czy reszta jest jednym z 20 standardowych aminokwasów.
+        ///
+        /// Ważne:
+        /// warianty takie jak MSE, HSD czy CYX nie są tutaj
+        /// traktowane jako standardowe aminokwasy.
+        /// </summary>
         public static bool IsStandardAminoAcid(string threeLetterResidueName)
         {
-            return !string.IsNullOrWhiteSpace(threeLetterResidueName)
-                && ThreeToOne.ContainsKey(threeLetterResidueName.Trim().ToUpperInvariant());
+            if (string.IsNullOrWhiteSpace(threeLetterResidueName))
+                return false;
+
+            string code = threeLetterResidueName
+                .Trim()
+                .ToUpperInvariant();
+
+            return StandardAminoAcids.Any(x => x.Code == code);
         }
     }
 }

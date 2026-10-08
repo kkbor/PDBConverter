@@ -11,5 +11,6 @@ namespace PDBLibrary.Models
         public int Id { get; set; }
         public string? Name { get; set; }
         public List<Atoms> Atoms { get; set; } = new ();
+        public char InsertionCode { get; set; } = ' ';
     }
 }

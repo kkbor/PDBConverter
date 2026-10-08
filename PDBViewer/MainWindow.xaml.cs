@@ -3,6 +3,7 @@ using Microsoft.Win32;
 using PDBLibrary.Models;
 using PDBLibrary.Parsers;
 using PDBLibrary.Srevices;
+using PDBLibrary.Validation;
 using PDBViewer.Vizualization;
 using System.Collections.ObjectModel;
 using System.Text;
@@ -47,10 +48,14 @@ namespace PDBViewer
         private List<Atoms> _allAtomsCache = new();
         private Dictionary<Atoms, Residues> _atomToResidue = new();
 
+        // wyniki ostatniej walidacji struktury (do wyswietlenia w panelu po prawej)
+        private readonly ObservableCollection<ValidationIssueViewModel> _validationIssues = new();
+
         public MainWindow()
         {
             InitializeComponent();
             SequenceItemsControl.ItemsSource = _sequenceItems;
+            ValidationIssuesList.ItemsSource = _validationIssues;
             PopulateMutateCombo();
         }
 
@@ -93,7 +98,14 @@ namespace PDBViewer
                                  $"reszt: {residueCount}, atomów: {atomCount}";
 
                 SaveButton.IsEnabled = true;
+                ValidateButton.IsEnabled = true;
                 ClearSelection();
+                _validationIssues.Clear();
+                ValidationSummaryText.Text = "Brak uruchomionej walidacji.";
+
+                // Resetuj liczniki do zera po wczytaniu nowego pliku
+                ErrorCountText.Text = "0";
+                WarningCountText.Text = "0";
 
                 RenderProtein();
                 BuildSequencePanel();
@@ -137,6 +149,38 @@ namespace PDBViewer
                 MessageBox.Show($"Błąd zapisu pliku PDB:\n{ex.Message}",
                     "Błąd", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        private void ValidateButton_Click(object sender, RoutedEventArgs e) => RunValidation();
+
+        // Uruchamia walidacje (spojnosc lancucha + konflikty przestrzenne) i
+        // wypelnia panel po prawej. Wywolywane recznie (przycisk) oraz
+        // automatycznie po kazdej udanej podmianie aminokwasu.
+        private void RunValidation()
+        {
+            if (_protein == null)
+                return;
+
+            var report = StructureValidator.Validate(_protein);
+
+            _validationIssues.Clear();
+            foreach (var issue in report.Issues.OrderByDescending(i => i.Severity))
+                _validationIssues.Add(new ValidationIssueViewModel(issue));
+
+            ErrorCountText.Text = report.ErrorCount.ToString();
+            WarningCountText.Text = report.WarningCount.ToString();
+
+            ValidationSummaryText.Text = report.Issues.Count == 0
+                ? "Brak wykrytych problemów."
+                : $"Znaleziono {report.Issues.Count} problem(ów): " +
+                  $"{report.ErrorCount} błędów, {report.WarningCount} ostrzeżeń.";
+        }
+
+        // Klikniecie w problem na liscie -> zaznacz (i podswietl w 3D) powiazana reszte
+        private void ValidationIssuesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ValidationIssuesList.SelectedItem is ValidationIssueViewModel vm && vm.Issue.Residue != null)
+                SelectResidue(vm.Issue.Residue);
         }
 
         private void StyleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -208,11 +252,21 @@ namespace PDBViewer
 
             foreach (var chain in _protein.Chains)
             {
-                _sequenceItems.Add(new ResidueSequenceItem($" Łańcuch {chain.Id}: "));
+                _sequenceItems.Add(
+                    new ResidueSequenceItem($" Łańcuch {chain.Id}: ")
+                );
 
                 foreach (var residue in chain.Residues.OrderBy(r => r.Id))
                 {
+                    // Do panelu sekwencji dodajemy tylko 20 standardowych
+                    // aminokwasów. Woda, jony, ligandy i kofaktory
+                    // (np. HOH, ZN, NA, PLP, FAD, GOL, XE) pozostają
+                    // w modelu białka, ale nie są częścią sekwencji.
+                    if (!AminoAcidCodes.IsStandardAminoAcid(residue.Name))
+                        continue;
+
                     var item = new ResidueSequenceItem(chain, residue);
+
                     _sequenceItems.Add(item);
                     _sequenceItemByResidue[residue] = item;
                 }
@@ -401,24 +455,57 @@ namespace PDBViewer
                 return;
 
             string oldName = _selectedResidue.Name;
-         
-            ResidueMutator.Mutate(_selectedResidue, newCode);
-           
+
+            try
+            {
+                // ta metoda (Twoja wersja) sama usuwa stary lancuch boczny,
+                // zmienia nazwe reszty i dobudowuje nowy lancuch boczny
+                // z szablonu geometrii (CCD) nalozonego na szkielet
+                ResidueMutator.Mutate(_selectedResidue, newCode);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Nie udało się podmienić aminokwasu:\n{ex.Message}",
+                    "Błąd", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
             // odswiez litere/tooltip w panelu sekwencji bez przebudowy calej listy
             _selectedItem.RefreshFromResidue();
 
-            // szkielet atomow sie zmienil (usuniete atomy lancucha bocznego) ->
-            // trzeba przebudowac geometrie 3D (wiazania, grupowanie po pierwiastku itd.)
+            // atomy sie zmienily -> trzeba przebudowac geometrie 3D
             RenderProtein();
 
             SelectedResidueText.Text = $"{_selectedResidue.Name} {_selectedResidue.Id}";
 
-            MessageBox.Show(
-                $"Zamieniono {oldName} → {_selectedResidue.Name} " +
-                $"(reszta {_selectedResidue.Id}).",
-                "Podmieniono aminokwas",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            RunMutationValidation(_selectedResidue);
+        }
+        private void RunMutationValidation(Residues changedResidue)
+        {
+            if (_protein == null)
+                return;
+
+            var report = StructureValidator.ValidateAfterMutation(
+                _protein,
+                changedResidue);
+
+            _validationIssues.Clear();
+
+            foreach (var issue in report.Issues.OrderByDescending(i => i.Severity))
+                _validationIssues.Add(new ValidationIssueViewModel(issue));
+
+            ErrorCountText.Text = report.ErrorCount.ToString();
+            WarningCountText.Text = report.WarningCount.ToString();
+
+            ValidationSummaryText.Text =
+                report.Issues.Count == 0
+                    ? $"Podmiana {changedResidue.Name} {changedResidue.Id}: brak problemów."
+                    : $"Podmiana {changedResidue.Name} {changedResidue.Id}: " +
+                      $"znaleziono {report.ErrorCount} błędów i " +
+                      $"{report.WarningCount} ostrzeżeń.";
+
+            // Jeżeli są problemy, można automatycznie otworzyć panel
+            ValidationExpander.IsExpanded = report.Issues.Count > 0;
         }
     }
 }

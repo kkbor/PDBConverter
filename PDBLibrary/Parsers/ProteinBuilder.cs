@@ -9,8 +9,23 @@ namespace PDBLibrary.Parsers
 {
     /// <summary>
     /// Wspolna logika wstawiania atomu do drzewa Protein -> Chain -> Residue -> Atom,
-    /// uzywana zarowno przez PdbParsers (legacy PDB), jak i MmcifParser (PDBx/mmCIF),
-    /// zeby nie duplikowac tej samej logiki wyszukiwania/tworzenia lancucha i reszty.
+    /// uzywana zarowno przez PdbParsers (legacy PDB), jak i MmcifParser (PDBx/mmCIF).
+    ///
+    /// WAZNE: reszta jest identyfikowana parą (ResidueId, InsertionCode), NIE samym
+    /// ResidueId. Dwie reszty o tym samym numerze ale roznym insertion code (np.
+    /// "23" i "23A") to FIZYCZNIE ROZNE reszty - bez tego rozroznienia zlewalyby
+    /// sie w jeden obiekt z podwojnym kompletem atomow szkieletu, co psuje m.in.
+    /// wykrywanie wiazan peptydowych w BondDetector.
+    ///
+    /// Analogiczny problem dotyczy ALTERNATYWNYCH KONFORMACJI (altLoc) - jeden
+    /// fizyczny atom moze miec w pliku kilka wpisow (np. dwa rozne "CA" dla
+    /// altLoc A i B). Parser nie odrzuca ich explicite na podstawie kolumny
+    /// altLoc, ale ten builder zachowuje TYLKO PIERWSZY napotkany atom o danej
+    /// nazwie w obrebie reszty (w pliku PDB altLoc ' '/'A' - czyli ta "glowna",
+    /// najczesciej najwyzej obsadzona konformacja - pojawia sie pierwsza) i
+    /// pomija kolejne kopie. Bez tego FirstOrDefault(x => x.Name == "...") w
+    /// BondDetector moze losowo trafic na "niewlasciwa" kopie przy parowaniu
+    /// z sasiednia reszta.
     /// </summary>
     internal static class ProteinBuilder
     {
@@ -24,13 +39,25 @@ namespace PDBLibrary.Parsers
                 protein.Chains.Add(chain);
             }
 
-            Residues? residue = chain.Residues.FirstOrDefault(r => r.Id == atom.ResidueId);
+            Residues? residue = chain.Residues.FirstOrDefault(r =>
+                r.Id == atom.ResidueId && r.InsertionCode == atom.InsertionCode);
 
             if (residue == null)
             {
-                residue = new Residues { Id = atom.ResidueId, Name = atom.ResidueName };
+                residue = new Residues
+                {
+                    Id = atom.ResidueId,
+                    Name = atom.ResidueName,
+                    InsertionCode = atom.InsertionCode
+                };
                 chain.Residues.Add(residue);
             }
+
+            bool isDuplicateAltLoc = residue.Atoms.Any(a =>
+                a.Name.Equals(atom.Name, System.StringComparison.OrdinalIgnoreCase));
+
+            if (isDuplicateAltLoc)
+                return; // druga/kolejna alternatywna konformacja tego samego atomu - pomijamy
 
             residue.Atoms.Add(atom);
         }
