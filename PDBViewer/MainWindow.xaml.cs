@@ -38,7 +38,8 @@ namespace PDBViewer
         private ResidueSequenceItem? _selectedItem;
 
         // dane dla wirtualizowanego ItemsControl (sekwencja aminokwasow)
-        private readonly ObservableCollection<ResidueSequenceItem> _sequenceItems = new();
+        // Każdy łańcuch ma osobny wiersz w panelu sekwencji.
+        private readonly ObservableCollection<ChainSequenceItem> _chainSequenceItems = new();
 
         // szybki dostep reszta -> jej "literka" w panelu sekwencji (do synchronizacji 3D <-> sekwencja)
         private readonly Dictionary<Residues, ResidueSequenceItem> _sequenceItemByResidue = new();
@@ -54,7 +55,7 @@ namespace PDBViewer
         public MainWindow()
         {
             InitializeComponent();
-            SequenceItemsControl.ItemsSource = _sequenceItems;
+            SequenceItemsControl.ItemsSource = _chainSequenceItems;
             ValidationIssuesList.ItemsSource = _validationIssues;
             PopulateMutateCombo();
         }
@@ -198,7 +199,9 @@ namespace PDBViewer
             {
                 0 => VisualizationStyle.BallAndStick,
                 1 => VisualizationStyle.SpheresOnly,
-                _ => VisualizationStyle.Wireframe
+                2 => VisualizationStyle.Wireframe,
+                3 => VisualizationStyle.Cartoon,
+                _ => VisualizationStyle.BallAndStick
             };
 
             VisualizationResult result = _visualizer.BuildWithMapping(_protein, style);
@@ -238,7 +241,7 @@ namespace PDBViewer
 
         private void BuildSequencePanel()
         {
-            _sequenceItems.Clear();
+            _chainSequenceItems.Clear();
             _sequenceItemByResidue.Clear();
             _highlightedResidue = null;
 
@@ -248,29 +251,48 @@ namespace PDBViewer
                 return;
             }
 
-            SequenceHeaderText.Text = $"Sekwencja ({_protein.Chains.Count} łańcuch/y):";
+            int proteinChainCount = 0;
 
             foreach (var chain in _protein.Chains)
             {
-                _sequenceItems.Add(
-                    new ResidueSequenceItem($" Łańcuch {chain.Id}: ")
-                );
+                var chainItem = new ChainSequenceItem(chain.Id);
 
-                foreach (var residue in chain.Residues.OrderBy(r => r.Id))
+                foreach (var residue in chain.Residues
+                             .OrderBy(r => r.Id)
+                             .ThenBy(r => r.InsertionCode))
                 {
-                    // Do panelu sekwencji dodajemy tylko 20 standardowych
-                    // aminokwasów. Woda, jony, ligandy i kofaktory
-                    // (np. HOH, ZN, NA, PLP, FAD, GOL, XE) pozostają
-                    // w modelu białka, ale nie są częścią sekwencji.
+                    // Panel pokazuje tylko standardowe aminokwasy.
+                    //
+                    // DNA/RNA:
+                    // DA, DC, DG, DT itd.
+                    //
+                    // oraz:
+                    // HOH, FAD, GOL, NA, XE itd.
+                    //
+                    // pozostają w strukturze i wizualizacji 3D,
+                    // ale nie są częścią sekwencji białkowej.
                     if (!AminoAcidCodes.IsStandardAminoAcid(residue.Name))
                         continue;
 
                     var item = new ResidueSequenceItem(chain, residue);
 
-                    _sequenceItems.Add(item);
+                    chainItem.Residues.Add(item);
+
                     _sequenceItemByResidue[residue] = item;
                 }
+
+                // Nie pokazujemy pustych łańcuchów w panelu sekwencji.
+                if (chainItem.Residues.Count > 0)
+                {
+                    _chainSequenceItems.Add(chainItem);
+                    proteinChainCount++;
+                }
             }
+
+            SequenceHeaderText.Text =
+                proteinChainCount == 1
+                    ? "Sekwencja (1 łańcuch białkowy):"
+                    : $"Sekwencja ({proteinChainCount} łańcuchy białkowe):";
         }
 
         // Odczytujemy DataContext z kontenera przy kazdym wywolaniu, wiec dziala
@@ -384,20 +406,51 @@ namespace PDBViewer
 
         private void SelectResidue(Residues residue)
         {
-            if (_selectedItem != null)
-                _selectedItem.IsSelected = false;
+            // Do mutacji można wybrać wyłącznie jeden
+            // z 20 standardowych aminokwasów.
+            //
+            // Woda, jony, ligandy i inne HETATM
+            // (HOH, XE, NA, GOL, FAD, 4MV itd.)
+            // mogą być widoczne w modelu 3D, ale nie można
+            // ich zamienić na aminokwas.
+            if (!AminoAcidCodes.IsStandardAminoAcid(residue.Name))
+            {
+                ClearSelection();
 
-            _selectedItem = _sequenceItemByResidue.TryGetValue(residue, out var item) ? item : null;
+                SelectedResidueText.Text =
+                    $"{residue.Name} {residue.Id} - nie jest aminokwasem";
+
+                return;
+            }
+
             if (_selectedItem != null)
+            {
+                _selectedItem.IsSelected = false;
+            }
+
+            _selectedItem =
+                _sequenceItemByResidue.TryGetValue(residue, out var item)
+                    ? item
+                    : null;
+
+            if (_selectedItem != null)
+            {
                 _selectedItem.IsSelected = true;
+            }
 
             _selectedResidue = residue;
-            SelectedResidueText.Text = $"{residue.Name} {residue.Id}";
+
+            SelectedResidueText.Text =
+                $"{residue.Name} {residue.Id}";
+
             MutateButton.IsEnabled = true;
 
-            // od razu pokaz podswietlenie w 3D (niezaleznie od hover)
+            // Podświetlenie zaznaczonego aminokwasu w 3D.
             if (_residueInfo.TryGetValue(residue, out var info))
-                HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
+            {
+                HighlightModelVisual.Content =
+                    _visualizer.BuildHighlightModel(info);
+            }
         }
 
         private void ClearSelection()
@@ -450,7 +503,17 @@ namespace PDBViewer
         {
             if (_selectedResidue == null || _selectedItem == null)
                 return;
+            if (!AminoAcidCodes.IsStandardAminoAcid(_selectedResidue.Name))
+            {
+                MessageBox.Show(
+                    $"Reszta {_selectedResidue.Name} {_selectedResidue.Id} " +
+                    $"nie jest standardowym aminokwasem i nie może zostać podmieniona.",
+                    "Nie można wykonać mutacji",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
 
+                return;
+            }
             if (MutateCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not string newCode)
                 return;
 

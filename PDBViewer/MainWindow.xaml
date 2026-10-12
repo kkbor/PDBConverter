@@ -22,6 +22,7 @@
                 <ComboBoxItem Content="Ball and Stick"/>
                 <ComboBoxItem Content="Tylko atomy"/>
                 <ComboBoxItem Content="Szkielet (cienki)"/>
+                <ComboBoxItem Content="Cartoon"/>
             </ComboBox>
         </StackPanel>
 
@@ -31,69 +32,112 @@
             <StackPanel>
                 <TextBlock x:Name="SequenceHeaderText" Text="Sekwencja: -" FontWeight="Bold" Margin="0,0,0,4"/>
 
-                <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                              VerticalScrollBarVisibility="Disabled"
-                              CanContentScroll="True"
-                              Height="40">
-                    <ItemsControl x:Name="SequenceItemsControl"
-                                  VirtualizingPanel.IsVirtualizing="True"
-                                  VirtualizingPanel.VirtualizationMode="Recycling"
-                                  VirtualizingPanel.ScrollUnit="Pixel"
-                                  ScrollViewer.CanContentScroll="True">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+              HorizontalScrollBarVisibility="Disabled"
+              MaxHeight="180">
 
-                        <!-- To jest sedno optymalizacji: VirtualizingStackPanel zamiast WrapPanel.
-                             WPF tworzy kontenery tylko dla elementow aktualnie widocznych
-                             (+ maly bufor), a przy przewijaniu je RECYKLINGUJE zamiast
-                             tworzyc nowe. Dla bialka z 5000 reszt w pamieci zyje w danym
-                             momencie np. ~100 kontenerow, a nie 5000. -->
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <VirtualizingStackPanel Orientation="Horizontal"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-
-                        <!-- EventSetter dziala poprawnie takze po recyklingu kontenera,
-                             bo jest czescia stylu szablonu, nie referencja do konkretnego
-                             obiektu utworzonego raz w kodzie. -->
-                        <ItemsControl.ItemContainerStyle>
-                            <Style TargetType="ContentPresenter">
-                                <EventSetter Event="MouseEnter" Handler="SequenceItem_MouseEnter"/>
-                                <EventSetter Event="MouseLeave" Handler="SequenceItem_MouseLeave"/>
-                                <EventSetter Event="MouseLeftButtonUp" Handler="SequenceItem_Click"/>
-                            </Style>
-                        </ItemsControl.ItemContainerStyle>
+                    <ItemsControl x:Name="SequenceItemsControl">
 
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate DataType="{x:Type local:ResidueSequenceItem}">
-                                <Border x:Name="ItemBorder"
-                                        BorderBrush="#E6E6E6" BorderThickness="1" CornerRadius="3"
-                                        Margin="1" Padding="4,1,4,1" Background="White"
-                                        Cursor="Hand" ToolTip="{Binding Tooltip}">
-                                    <TextBlock Text="{Binding Letter}" FontFamily="Consolas" FontSize="14"/>
-                                </Border>
+                            <DataTemplate>
 
-                                <DataTemplate.Triggers>
-                                    <!-- Stan trzymany jest w DANYCH (IsSelected / IsHighlighted),
-                                         nie w konkretnym elemencie UI - dzieki temu dziala
-                                         poprawnie mimo recyklingu kontenerow.
-                                         Kolejnosc ma znaczenie: IsHighlighted (hover) nizej,
-                                         wiec wizualnie przykrywa IsSelected, kiedy oba sa prawdziwe. -->
-                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                        <Setter TargetName="ItemBorder" Property="Background" Value="#BBDFFF"/>
-                                        <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#3399FF"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
-                                        <Setter TargetName="ItemBorder" Property="Background" Value="#FFC400"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsLabel}" Value="True">
-                                        <Setter TargetName="ItemBorder" Property="BorderThickness" Value="0"/>
-                                        <Setter TargetName="ItemBorder" Property="Background" Value="Transparent"/>
-                                        <Setter TargetName="ItemBorder" Property="Cursor" Value="Arrow"/>
-                                    </DataTrigger>
-                                </DataTemplate.Triggers>
+                                <StackPanel Margin="0,2,0,6">
+
+                                    <!-- Nazwa łańcucha -->
+                                    <TextBlock Text="{Binding ChainId, StringFormat=Łańcuch {0}:}"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,2"/>
+
+                                    <!-- Każdy łańcuch ma własne przewijanie poziome -->
+                                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled"
+                                  CanContentScroll="True">
+
+                                        <ItemsControl ItemsSource="{Binding Residues}"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling"
+                                      ScrollViewer.CanContentScroll="True">
+
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <VirtualizingStackPanel Orientation="Horizontal"/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+
+                                            <ItemsControl.ItemContainerStyle>
+                                                <Style TargetType="ContentPresenter">
+
+                                                    <EventSetter Event="MouseEnter"
+                                                 Handler="SequenceItem_MouseEnter"/>
+
+                                                    <EventSetter Event="MouseLeave"
+                                                 Handler="SequenceItem_MouseLeave"/>
+
+                                                    <EventSetter Event="MouseLeftButtonUp"
+                                                 Handler="SequenceItem_Click"/>
+
+                                                </Style>
+                                            </ItemsControl.ItemContainerStyle>
+
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type local:ResidueSequenceItem}">
+
+                                                    <Border x:Name="ItemBorder"
+                                            BorderBrush="#E6E6E6"
+                                            BorderThickness="1"
+                                            CornerRadius="3"
+                                            Margin="1"
+                                            Padding="4,1,4,1"
+                                            Background="White"
+                                            Cursor="Hand"
+                                            ToolTip="{Binding Tooltip}">
+
+                                                        <TextBlock Text="{Binding Letter}"
+                                                   FontFamily="Consolas"
+                                                   FontSize="14"/>
+
+                                                    </Border>
+
+                                                    <DataTemplate.Triggers>
+
+                                                        <DataTrigger Binding="{Binding IsHighlighted}"
+                                                     Value="True">
+                                                            <Setter TargetName="ItemBorder"
+                                                    Property="Background"
+                                                    Value="#FFE8A3"/>
+                                                        </DataTrigger>
+
+                                                        <DataTrigger Binding="{Binding IsSelected}"
+                                                     Value="True">
+                                                            <Setter TargetName="ItemBorder"
+                                                    Property="Background"
+                                                    Value="#FFCC80"/>
+
+                                                            <Setter TargetName="ItemBorder"
+                                                    Property="BorderBrush"
+                                                    Value="#F57C00"/>
+
+                                                            <Setter TargetName="ItemBorder"
+                                                    Property="BorderThickness"
+                                                    Value="2"/>
+                                                        </DataTrigger>
+
+                                                    </DataTemplate.Triggers>
+
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+
+                                        </ItemsControl>
+
+                                    </ScrollViewer>
+
+                                </StackPanel>
+
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
+
                     </ItemsControl>
+
                 </ScrollViewer>
 
                 <TextBlock x:Name="HoverInfoText" Margin="0,4,0,0" FontStyle="Italic"

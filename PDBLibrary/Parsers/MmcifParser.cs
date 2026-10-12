@@ -55,6 +55,19 @@ namespace PDBLibrary.Parsers
                         ParseAtomSiteLoop(protein, lines, ref i, columns);
                         continue; // i zostalo juz przesuniete za wiersze danych tej petli
                     }
+                    if (columns.Count > 0 &&
+                        columns[0].StartsWith("_struct_conf.",StringComparison.OrdinalIgnoreCase))
+                    {
+                        ParseStructConfLoop(protein, lines, ref i, columns);
+                        continue;
+                    }
+
+                    if (columns.Count > 0 &&
+                        columns[0].StartsWith("_struct_sheet_range.", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ParseStructSheetRangeLoop(protein, lines, ref i, columns);
+                        continue;
+                    }
 
                     // inna petla (np. _entity, _struct_conf) - pomijamy jej wiersze danych
                     while (i < lines.Length && IsLoopDataRow(lines[i]))
@@ -279,7 +292,198 @@ namespace PDBLibrary.Parsers
 
             return tokens;
         }
+        private static void ParseStructConfLoop(Protein protein, string[] lines, ref int i, List<string> columns)
+        {
+            var colIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
+            for (int c = 0; c < columns.Count; c++)
+            {
+                const string prefix = "_struct_conf.";
+
+                string name = columns[c].StartsWith(
+                        prefix,
+                        StringComparison.OrdinalIgnoreCase)
+                        ? columns[c].Substring(prefix.Length)
+                        : columns[c];
+
+                colIndex[name] = c;
+            }
+
+            int idxType = GetIndex(colIndex, "conf_type_id");
+
+            int idxStartChain = GetIndex(colIndex, "beg_auth_asym_id", "beg_label_asym_id");
+
+            int idxStartResidue = GetIndex(colIndex, "beg_auth_seq_id", "beg_label_seq_id");
+
+            int idxStartInsertion = GetIndex(colIndex, "pdbx_beg_PDB_ins_code");
+
+            int idxEndChain = GetIndex(colIndex, "end_auth_asym_id", "end_label_asym_id");
+
+            int idxEndResidue = GetIndex(colIndex, "end_auth_seq_id", "end_label_seq_id");
+
+            int idxEndInsertion = GetIndex(colIndex, "pdbx_end_PDB_ins_code");
+
+            while (i < lines.Length && IsLoopDataRow(lines[i]))
+            {
+                var tokens = TokenizeLine(lines[i]);
+
+                i++;
+
+                if (tokens.Count < columns.Count)
+                    continue;
+
+                string type = idxType >= 0
+                        ? CleanToken(tokens[idxType])
+                        : string.Empty;
+
+                // Interesują nas tutaj helisy.
+                if (!type.StartsWith("HELX", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string startChainToken = idxStartChain >= 0
+                        ? CleanToken(tokens[idxStartChain])
+                        : string.Empty;
+
+                string endChainToken = idxEndChain >= 0
+                        ? CleanToken(tokens[idxEndChain])
+                        : startChainToken;
+
+                char startChain = startChainToken.Length > 0
+                        ? startChainToken[0]
+                        : ' ';
+
+                char endChain = endChainToken.Length > 0
+                        ? endChainToken[0]
+                        : startChain;
+
+                if (startChain != endChain)
+                    continue;
+
+                int startResidue = idxStartResidue >= 0
+                        ? ParseIntSafe(tokens[idxStartResidue])
+                        : 0;
+
+                int endResidue = idxEndResidue >= 0
+                        ? ParseIntSafe(tokens[idxEndResidue])
+                        : 0;
+
+                string startIns = idxStartInsertion >= 0
+                        ? CleanToken(tokens[idxStartInsertion])
+                        : string.Empty;
+
+                string endIns = idxEndInsertion >= 0
+                        ? CleanToken(tokens[idxEndInsertion])
+                        : string.Empty;
+
+                protein.SecondaryStructures.Add(new SecondaryStructureSegment
+                {
+                    ChainId = startChain,
+                    StartResidueId = startResidue,
+
+                    StartInsertionCode = startIns.Length > 0
+                        ? startIns[0]
+                        : ' ',
+                    EndResidueId = endResidue,
+                    EndInsertionCode = endIns.Length > 0
+                        ? endIns[0]
+                        : ' ',
+                    Type = SecondaryStructureType.Helix
+                });
+            }
+        }
+        private static void ParseStructSheetRangeLoop(Protein protein, string[] lines, ref int i, List<string> columns)
+        {
+            var colIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            for (int c = 0; c < columns.Count; c++)
+            {
+                const string prefix = "_struct_sheet_range.";
+
+                string name = columns[c].StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                        ? columns[c].Substring(prefix.Length)
+                        : columns[c];
+
+                colIndex[name] = c;
+            }
+
+            int idxStartChain = GetIndex(colIndex, "beg_auth_asym_id", "beg_label_asym_id");
+
+            int idxStartResidue = GetIndex(colIndex, "beg_auth_seq_id", "beg_label_seq_id");
+
+            int idxStartInsertion = GetIndex(colIndex, "pdbx_beg_PDB_ins_code");
+
+            int idxEndChain = GetIndex(colIndex, "end_auth_asym_id", "end_label_asym_id");
+
+            int idxEndResidue = GetIndex(colIndex, "end_auth_seq_id", "end_label_seq_id");
+
+            int idxEndInsertion = GetIndex(colIndex, "pdbx_end_PDB_ins_code");
+
+            while (i < lines.Length &&  IsLoopDataRow(lines[i]))
+            {
+                var tokens = TokenizeLine(lines[i]);
+
+                i++;
+
+                if (tokens.Count < columns.Count)
+                    continue;
+
+                string startChainToken = idxStartChain >= 0
+                        ? CleanToken(tokens[idxStartChain])
+                        : string.Empty;
+
+                string endChainToken = idxEndChain >= 0
+                        ? CleanToken(tokens[idxEndChain])
+                        : startChainToken;
+
+                char startChain = startChainToken.Length > 0
+                        ? startChainToken[0]
+                        : ' ';
+
+                char endChain = endChainToken.Length > 0
+                        ? endChainToken[0]
+                        : startChain;
+
+                if (startChain != endChain)
+                    continue;
+
+                int startResidue = idxStartResidue >= 0
+                        ? ParseIntSafe(tokens[idxStartResidue])
+                        : 0;
+
+                int endResidue = idxEndResidue >= 0
+                        ? ParseIntSafe(tokens[idxEndResidue])
+                        : 0;
+
+                string startIns = idxStartInsertion >= 0
+                        ? CleanToken(tokens[idxStartInsertion])
+                        : string.Empty;
+
+                string endIns = idxEndInsertion >= 0
+                        ? CleanToken(tokens[idxEndInsertion])
+                        : string.Empty;
+
+                protein.SecondaryStructures.Add(new SecondaryStructureSegment
+                {
+                    ChainId = startChain,
+
+                    StartResidueId = startResidue,
+
+                    StartInsertionCode = startIns.Length > 0
+                        ? startIns[0]
+                        : ' ',
+
+                    EndResidueId = endResidue,
+
+                    EndInsertionCode = endIns.Length > 0
+                        ? endIns[0]
+                        : ' ',
+
+                    Type = SecondaryStructureType.Sheet
+                    });
+            }
+        }
         /// <summary>Usuwa oznaczenia wartosci brakujacej ('?', '.') i ewentualne cudzyslowy.</summary>
         private static string CleanToken(string token)
         {

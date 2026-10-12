@@ -10,5 +10,6 @@ namespace PDBLibrary.Models
     {
         public string? Name { get; set; }
         public List<Chains> Chains { get; set; } = new();
+        public List<SecondaryStructureSegment> SecondaryStructures { get; } = new();
     }
 }

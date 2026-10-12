@@ -2,8 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace PDBLibrary.Validation
 {
@@ -13,6 +11,19 @@ namespace PDBLibrary.Validation
     ///  2) czy odleglosc C(i)-N(i+1) miedzy kolejnymi resztami miesci sie
     ///     w normalnym zakresie dlugosci wiazania peptydowego (typowo ~1.33 A) -
     ///     jesli nie, oznacza to przerwe w lancuchu (albo zle dane wejsciowe).
+    ///
+    /// Rozroznienie (wazne, zeby nie mylic dwoch roznych sytuacji):
+    ///  - LUKA W NUMERACJI (brakujace reszty, np. 23 -> 77) -> Warning
+    ///    "Brakujace reszty" - to nie jest zla geometria, po prostu plik nie
+    ///    ma danych dla tego fragmentu (typowe dla nierozwiazanych petli).
+    ///  - RESZTY SA KOLEJNE, ale odleglosc C-N jest nienormalna -> Error
+    ///    "Nieprawidlowa dlugosc wiazania peptydowego" - to faktyczny problem
+    ///    geometryczny.
+    ///
+    /// Cala ta logika zyje WYLACZNIE w CheckPeptideBond - Validate() i
+    /// ValidateResidue() wywoluja ja bezwarunkowo dla kazdej sasiadujacej pary,
+    /// zeby obie sciezki (pelna walidacja / walidacja po mutacji) dawaly
+    /// identyczny wynik dla tej samej pary reszt.
     /// </summary>
     public static class ChainValidator
     {
@@ -52,31 +63,48 @@ namespace PDBLibrary.Validation
                 foreach (var residue in aminoAcidResidues)
                     CheckBackboneCompleteness(chain, residue, report);
 
+                // CheckPeptideBond sam rozroznia "luka w numeracji" (Warning) od
+                // "zla geometria miedzy kolejnymi resztami" (Error) - wywolujemy
+                // go bezwarunkowo dla kazdej sasiadujacej pary.
                 for (int i = 0; i < aminoAcidResidues.Count - 1; i++)
-                {
-                    var current = aminoAcidResidues[i];
-                    var next = aminoAcidResidues[i + 1];
-
-                    // Jeżeli numeracja wskazuje na brakujące reszty,
-                    // nie sprawdzamy między nimi wiązania peptydowego.
-                    if (next.Id > current.Id + 1)
-                    {
-                        report.Issues.Add(new ValidationIssue
-                        {
-                            Severity = ValidationSeverity.Warning,
-                            Message =
-                                $"Brakujące reszty w łańcuchu {chain.Id} " +
-                                $"między {current.Name} {current.Id} a {next.Name} {next.Id}.",
-                            Residue = current,
-                            ResidueB = next
-                        });
-
-                        continue;
-                    }
-
-                    CheckPeptideBond(chain, current, next, report);
-                }
+                    CheckPeptideBond(chain, aminoAcidResidues[i], aminoAcidResidues[i + 1], report);
             }
+        }
+
+        /// <summary>
+        /// Walidacja ograniczona do JEDNEJ reszty (np. po podmianie aminokwasu) -
+        /// sprawdza jej szkielet oraz ciaglosc z bezposrednimi sasiadami w
+        /// sekwencji. Celowo wywoluje CheckPeptideBond DOKLADNIE tak samo jak
+        /// Validate() (bez dodatkowego warunku na zewnatrz) - dzieki temu jesli
+        /// podmieniana reszta sasiaduje z prawdziwa luka w strukturze, user
+        /// dostanie o tym informacje (Warning) tutaj tak samo, jak dostalby
+        /// przy pelnej walidacji, zamiast ciszy.
+        /// </summary>
+        public static void ValidateResidue(Protein protein, Residues changedResidue, ValidationReport report)
+        {
+            var chain = protein.Chains.FirstOrDefault(c => c.Residues.Contains(changedResidue));
+
+            if (chain == null)
+                return;
+
+            CheckBackboneCompleteness(chain, changedResidue, report);
+
+            var residues = chain.Residues
+                .Where(IsStandardAminoAcid)
+                .OrderBy(r => r.Id)
+                .ThenBy(r => r.InsertionCode)
+                .ToList();
+
+            int index = residues.IndexOf(changedResidue);
+
+            if (index == -1)
+                return;
+
+            if (index > 0)
+                CheckPeptideBond(chain, residues[index - 1], residues[index], report);
+
+            if (index < residues.Count - 1)
+                CheckPeptideBond(chain, residues[index], residues[index + 1], report);
         }
 
         /// <summary>
@@ -110,39 +138,50 @@ namespace PDBLibrary.Validation
             }
         }
 
+        /// <summary>
+        /// Jedyne miejsce, w ktorym zyje rozroznienie "luka w numeracji" vs
+        /// "zla geometria". Wywolywane bezwarunkowo z Validate() i
+        /// ValidateResidue() dla kazdej sasiadujacej pary reszt - gwarantuje
+        /// to identyczny wynik niezaleznie od tego, ktora sciezka wywolala walidacje.
+        /// </summary>
         private static void CheckPeptideBond(Chains chain, Residues first, Residues second, ValidationReport report)
         {
-            // Jeżeli numery reszt nie są kolejne,
-            // oznacza to brak fragmentu łańcucha,
-            // a nie błędną geometrię wiązania.
+            // Jezeli numery reszt nie sa kolejne, oznacza to brak fragmentu
+            // lancucha (np. nierozwiazana petla w krysztale), a NIE bledna
+            // geometrie wiazania - to rozne sytuacje, rozne komunikaty.
             if (second.Id > first.Id + 1)
-            { 
-                report.Issues.Add(new ValidationIssue 
-                { 
+            {
+                report.Issues.Add(new ValidationIssue
+                {
                     Severity = ValidationSeverity.Warning,
-                    Message = $"Brakujące reszty w łańcuchu" +
-                    $" {chain.Id} między " + $"{first.Name} {first.Id} a {second.Name} {second.Id}.",
-                    Residue = first, ResidueB = second 
-                }); 
+                    Message = $"Brakujące reszty w łańcuchu {chain.Id} między " +
+                              $"{first.Name} {first.Id} a {second.Name} {second.Id}.",
+                    Residue = first,
+                    ResidueB = second
+                });
                 return;
-            } 
+            }
+
             var c = FindAtom(first, "C");
             var n = FindAtom(second, "N");
-            // Brak atomu został już zgłoszony przez CheckBackboneCompleteness.
-            if (c == null || n == null) 
-                return;
-            double distance = Distance(c, n); 
-            // Sprawdzamy geometrię tylko pomiędzy sąsiednimi resztami.
+
+            if (c == null || n == null)
+                return; // brak atomu juz zgloszony przez CheckBackboneCompleteness
+
+            double distance = Distance(c, n);
+
             if (distance < MinPeptideBond || distance > MaxPeptideBond)
-            { 
-                report.Issues.Add(new ValidationIssue 
-                { 
-                    Severity = ValidationSeverity.Error, 
-                    Message = $"Nieprawidłowa długość wiązania peptydowego w łańcuchu {chain.Id} " + 
-                    $"między {first.Name} {first.Id} a {second.Name} {second.Id}: " + $"C–N = {distance:F2} Å.",
-                    Residue = first, ResidueB = second 
-                }); 
-            } 
+            {
+                report.Issues.Add(new ValidationIssue
+                {
+                    Severity = ValidationSeverity.Error,
+                    Message = $"Nieprawidłowa długość wiązania peptydowego w łańcuchu {chain.Id} " +
+                              $"między {first.Name} {first.Id} a {second.Name} {second.Id}: " +
+                              $"C–N = {distance:F2} Å.",
+                    Residue = first,
+                    ResidueB = second
+                });
+            }
         }
 
         private static Atoms? FindAtom(Residues residue, string name) =>
@@ -152,59 +191,6 @@ namespace PDBLibrary.Validation
         {
             double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
             return Math.Sqrt(dx * dx + dy * dy + dz * dz);
-        }
-        public static void ValidateResidue(Protein protein, Residues changedResidue, ValidationReport report)
-        {
-            // 1. Znalezienie łańcucha, do którego należy zmieniona reszta
-            var chain = protein.Chains
-                .FirstOrDefault(c => c.Residues.Contains(changedResidue));
-
-            if (chain == null)
-                return;
-
-            // 2. Sprawdzenie kompletności szkieletu zmienionej reszty
-            CheckBackboneCompleteness(chain, changedResidue, report);
-
-            // 3. Pobranie standardowych aminokwasów w tej samej
-            //    kolejności co w pełnej walidacji
-            var residues = chain.Residues
-                .Where(r => StandardAminoAcids.Contains(r.Name))
-                .OrderBy(r => r.Id)
-                .ThenBy(r => r.InsertionCode)
-                .ToList();
-
-            // 4. Znalezienie pozycji zmienionej reszty
-            int index = residues.IndexOf(changedResidue);
-
-            if (index == -1)
-                return;
-            // W walidacji po mutacji nie raportujemy istniejących wcześniej
-            // luk w numeracji. Pełna walidacja struktury robi to w Validate().
-            // Tutaj sprawdzamy jedynie wiązanie z poprzednią resztą,
-            // jeśli są one rzeczywiście kolejne w sekwencji.
-            // 5. Poprzednia reszta -> zmieniona reszta
-            if (index > 0)
-            {
-                var previous = residues[index - 1];
-                var current = residues[index];
-
-                if (current.Id <= previous.Id + 1)
-                {
-                    CheckPeptideBond(chain, residues[index - 1], residues[index], report);
-                }
-            }
-
-            // 6. Zmieniona reszta -> następna reszta
-            if (index < residues.Count - 1)
-            {
-                var current = residues[index];
-                var next = residues[index + 1];
-
-                if (next.Id <= current.Id + 1)
-                {
-                    CheckPeptideBond(chain, residues[index], residues[index + 1], report);
-                }
-            }
         }
     }
 }
