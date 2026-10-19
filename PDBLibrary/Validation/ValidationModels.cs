@@ -24,6 +24,17 @@ namespace PDBLibrary.Validation
 
         /// <summary>Druga reszta - uzywane przy problemach LACZACYCH dwie reszty (np. przerwa w lancuchu, starcie).</summary>
         public Residues? ResidueB { get; init; }
+
+        /// <summary>
+        /// Konkretny atom, ktorego dotyczy problem (np. jeden z dwoch atomow w
+        /// konflikcie sterycznym) - null dla problemow nie przypisanych do
+        /// pojedynczego atomu (np. brakujace reszty w lancuchu). Pozwala podswietlic
+        /// w 3D DOKLADNIE ten atom, a nie cala reszte.
+        /// </summary>
+        public Atoms? Atom { get; init; }
+
+        /// <summary>Drugi atom bioracy udzial w konflikcie (razem z Atom) - np. para atomow steryjnie kolidujacych.</summary>
+        public Atoms? AtomB { get; init; }
     }
 
     public class ValidationReport

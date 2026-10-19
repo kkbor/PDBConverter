@@ -4,8 +4,6 @@ using PDBLibrary.Sevices.PDBLibrary.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace PDBLibrary.Srevices
 {
@@ -16,6 +14,11 @@ namespace PDBLibrary.Srevices
     /// Szkielet N-CA-C-O-OXT pozostaje na swoim miejscu.
     /// Łańcuch boczny starego aminokwasu jest usuwany,
     /// a następnie tworzony jest łańcuch boczny nowego aminokwasu.
+    ///
+    /// Jeżeli nowo zbudowany łańcuch boczny koliduje przestrzennie z otoczeniem,
+    /// próbujemy go naprawić obracając go wokół wiązania CA-CB (patrz
+    /// SideChainOrientationResolver), zanim oddamy sterowanie dalej - dlatego
+    /// ta metoda potrzebuje teraz całego Protein, nie tylko podmienianej reszty.
     /// </summary>
     public static class ResidueMutator
     {
@@ -25,10 +28,25 @@ namespace PDBLibrary.Srevices
                 "N", "CA", "C", "O", "OXT"
             };
 
-        public static void Mutate(
+        /// <summary>
+        /// Podmienia aminokwas i (w miarę możliwości) eliminuje kolizje steryczne
+        /// nowego łańcucha bocznego poprzez obrót wokół CA-CB.
+        ///
+        /// Zwraca pełny log prób (SideChainRotationResult) - nie tylko to, czy
+        /// finalnie się udało, ale i to, ile błędów/ostrzeżeń dawała konformacja
+        /// z szablonu oraz każdy kolejny sprawdzony kąt obrotu, żeby dało się to
+        /// pokazać w UI zamiast samego "tak/nie". To tylko informacja pomocnicza -
+        /// ostateczny stan reszty i tak trzeba sprawdzić pełną walidacją po
+        /// mutacji (StructureValidator.ValidateAfterMutation).
+        /// </summary>
+        public static SideChainRotationResult Mutate(
+            Protein protein,
             Residues residue,
             string newThreeLetterCode)
         {
+            if (protein == null)
+                throw new ArgumentNullException(nameof(protein));
+
             if (residue == null)
                 throw new ArgumentNullException(nameof(residue));
 
@@ -67,7 +85,7 @@ namespace PDBLibrary.Srevices
             bool success =
                 SideChainBuilder.TryBuildSideChain(
                     residue,
-                    template);
+                    template!);
 
             if (!success)
             {
@@ -76,6 +94,14 @@ namespace PDBLibrary.Srevices
                     $"dla reszty {residue.Id}, ponieważ brakuje " +
                     $"atomów szkieletu N, CA lub C.");
             }
+
+            // Szablon CCD to jedna, uśredniona konformacja - w realnej
+            // strukturze nowy łańcuch boczny może kolidować przestrzennie
+            // z sąsiadami. Zanim oddamy sterowanie dalej, próbujemy to
+            // naprawić czysto algebraicznie: obracając cały łańcuch boczny
+            // wokół wiązania CA-CB, aż przestanie kolidować (albo skończą
+            // się próby kątów).
+            return SideChainOrientationResolver.TryResolveClashes(protein, residue);
         }
     }
 }

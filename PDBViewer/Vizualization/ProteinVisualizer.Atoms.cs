@@ -12,7 +12,8 @@ namespace PDBViewer.Vizualization
     {
         /// <summary>
         /// Dodaje sferę pojedynczego atomu do istniejącego
-        /// MeshGeometry3D.
+        /// MeshGeometry3D, z promieniem dobranym automatycznie
+        /// na podstawie pierwiastka (CPK).
         ///
         /// Metoda NIE tworzy GeometryModel3D.
         ///
@@ -27,6 +28,18 @@ namespace PDBViewer.Vizualization
                     ? r
                     : DefaultAtomRadius;
 
+            AddAtomSphere(mesh, atom, radius, segments, rings);
+        }
+
+        /// <summary>
+        /// Jak wyżej, ale z jawnie podanym promieniem - używane np. przy
+        /// rysowaniu overlayu kolizji sterycznej, gdzie sfera ma być CELOWO
+        /// większa niż rzeczywisty atom (żeby czerwona "otoczka" była widoczna
+        /// nad normalnym kolorem atomu, zamiast nakładać się z nim 1:1 i
+        /// powodować z-fighting).
+        /// </summary>
+        private void AddAtomSphere(MeshGeometry3D mesh, Atoms atom, double radius, int segments, int rings)
+        {
             int startIndex = mesh.Positions.Count;
 
 

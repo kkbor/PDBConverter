@@ -209,7 +209,12 @@ namespace PDBLibrary.Validation
                     $"(nachodzenie {overlap:F2} Å ponad sumę promieni van der Waalsa).",
 
                 Residue = residueA,
-                ResidueB = residueB
+                ResidueB = residueB,
+
+                // Konkretne atomy biorące udział w kolizji - potrzebne, żeby dało
+                // się podświetlić w 3D dokładnie TEN atom, a nie całą resztę.
+                Atom = a,
+                AtomB = b
             });
         }
 

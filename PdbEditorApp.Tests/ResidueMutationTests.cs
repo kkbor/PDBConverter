@@ -4,9 +4,9 @@ using PDBLibrary.Srevices;
 using PDBLibrary.Validation;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace PdbEditorApp.Tests
@@ -95,7 +95,7 @@ namespace PdbEditorApp.Tests
                 .Where(a => BackboneAtomNames.Contains(a.Name))
                 .ToDictionary(a => a.Name.ToUpperInvariant(), a => (a.X, a.Y, a.Z));
 
-            ResidueMutator.Mutate(residue, "TRP");
+            ResidueMutator.Mutate(protein, residue, "TRP");
 
             Assert.Equal("TRP", residue.Name);
             Assert.NotEqual(oldName, residue.Name);
@@ -125,40 +125,20 @@ namespace PdbEditorApp.Tests
         }
 
         [Fact]
-        public void Mutate_ToGlycine_RemovesAllSideChainHeavyAtoms()
+        public void Mutate_ToGlycine_RemovesAllSideChainAtoms()
         {
             var protein = LoadKnownGoodProtein();
+            var residue = PickMutableResidue(protein, excludeName: "GLY");
 
-            var residue =
-                PickMutableResidue(
-                    protein,
-                    excludeName: "GLY");
-
-            ResidueMutator.Mutate(
-                residue,
-                "GLY");
+            ResidueMutator.Mutate(protein, residue, "GLY");
 
             Assert.Equal("GLY", residue.Name);
 
-            // Glicyna nie posiada atomu C-beta.
-            Assert.DoesNotContain(
-                residue.Atoms,
-                a => a.Name.Equals(
-                    "CB",
-                    StringComparison.OrdinalIgnoreCase));
-
-            // Nie powinno być żadnych ciężkich atomów
-            // łańcucha bocznego.
-            var sideChainHeavyAtoms = residue.Atoms
-                .Where(a =>
-                    !BackboneAtomNames.Contains(a.Name) &&
-                    !string.Equals(
-                        a.Element,
-                        "H",
-                        StringComparison.OrdinalIgnoreCase))
+            var sideChainAtoms = residue.Atoms
+                .Where(a => !BackboneAtomNames.Contains(a.Name))
                 .ToList();
 
-            Assert.Empty(sideChainHeavyAtoms);
+            Assert.Empty(sideChainAtoms); // glicyna nie ma łańcucha bocznego (brak nawet CB)
         }
 
         [Fact]
@@ -167,7 +147,7 @@ namespace PdbEditorApp.Tests
             var protein = LoadKnownGoodProtein();
             var residue = PickMutableResidue(protein, excludeName: "PHE");
 
-            ResidueMutator.Mutate(residue, "PHE");
+            ResidueMutator.Mutate(protein, residue, "PHE");
 
             // Walidacja scoped - dokładnie to, czego używa UI po każdej mutacji.
             var scoped = StructureValidator.ValidateAfterMutation(protein, residue);
@@ -198,7 +178,7 @@ namespace PdbEditorApp.Tests
             var protein = LoadKnownGoodProtein();
             var residue = PickMutableResidue(protein, excludeName: "LEU");
 
-            ResidueMutator.Mutate(residue, "LEU");
+            ResidueMutator.Mutate(protein, residue, "LEU");
 
             var report = new ValidationReport();
             ChainValidator.ValidateResidue(protein, residue, report);
@@ -224,7 +204,7 @@ namespace PdbEditorApp.Tests
             var residue = PickMutableResidue(protein, excludeName: "___none___");
             string name = residue.Name;
 
-            ResidueMutator.Mutate(residue, name);
+            ResidueMutator.Mutate(protein, residue, name);
 
             Assert.Equal(name, residue.Name);
 
@@ -240,12 +220,21 @@ namespace PdbEditorApp.Tests
         // ============================================================
 
         [Fact]
+        public void Mutate_NullProtein_ThrowsArgumentNullException()
+        {
+            var residue = new Residues { Id = 1, Name = "ALA", InsertionCode = ' ' };
+
+            Assert.Throws<ArgumentNullException>(() =>
+                ResidueMutator.Mutate(null!, residue, "GLY"));
+        }
+
+        [Fact]
         public void Mutate_NullResidue_ThrowsArgumentNullException()
         {
             var protein = new Protein();
 
             Assert.Throws<ArgumentNullException>(() =>
-                ResidueMutator.Mutate(null!, "GLY"));
+                ResidueMutator.Mutate(protein, null!, "GLY"));
         }
 
         [Fact]
@@ -255,7 +244,7 @@ namespace PdbEditorApp.Tests
             var residue = new Residues { Id = 1, Name = "ALA", InsertionCode = ' ' };
 
             Assert.Throws<ArgumentException>(() =>
-                ResidueMutator.Mutate(residue, "   "));
+                ResidueMutator.Mutate(protein, residue, "   "));
         }
 
         [Fact]
@@ -265,7 +254,7 @@ namespace PdbEditorApp.Tests
             var residue = new Residues { Id = 1, Name = "ALA", InsertionCode = ' ' };
 
             var ex = Assert.Throws<InvalidOperationException>(() =>
-                ResidueMutator.Mutate(residue, "ZZZ"));
+                ResidueMutator.Mutate(protein, residue, "ZZZ"));
 
             Assert.Contains("szablonu", ex.Message);
         }
@@ -301,7 +290,7 @@ namespace PdbEditorApp.Tests
             protein.Chains.Add(chain);
 
             var ex = Assert.Throws<InvalidOperationException>(() =>
-                ResidueMutator.Mutate(residue, "SER"));
+                ResidueMutator.Mutate(protein, residue, "SER"));
 
             Assert.Contains("szkieletu", ex.Message);
         }

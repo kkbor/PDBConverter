@@ -221,13 +221,20 @@
             </Border>
         </Expander>
 
-        <h:HelixViewport3D x:Name="Viewport" DockPanel.Dock="Bottom"
-                            ZoomExtentsWhenLoaded="True"
-                            ShowCoordinateSystem="True"
-                            ShowViewCube="True"
-                            MouseMove="Viewport_MouseMove"
-                            MouseLeave="Viewport_MouseLeave"
-                            MouseLeftButtonUp="Viewport_MouseLeftButtonUp">
+        <h:HelixViewport3D x:Name="Viewport"
+                   DockPanel.Dock="Bottom"
+                   ZoomExtentsWhenLoaded="True"
+                   ShowCoordinateSystem="True"
+                   ShowViewCube="True"
+                   IsPanEnabled="True"
+                   IsRotationEnabled="True"
+                   IsZoomEnabled="True"
+                   RotateGesture="LeftClick"
+                   PanGesture="RightClick"
+                   MouseMove="Viewport_MouseMove"
+                   MouseLeave="Viewport_MouseLeave"
+                   MouseLeftButtonUp="Viewport_MouseLeftButtonUp">
+        
             <h:HelixViewport3D.DefaultCamera>
                 <PerspectiveCamera Position="0,0,50" LookDirection="0,0,-1" UpDirection="0,1,0"/>
             </h:HelixViewport3D.DefaultCamera>
@@ -241,6 +248,8 @@
             <!-- Osobna, bardzo lekka warstwa tylko na podswietlenie aktualnie
                  najechanej reszty - podmieniana w calosci przy kazdym hover. -->
             <ModelVisual3D x:Name="HighlightModelVisual"/>
+            <!-- Osobna, warstwa tylko na podswietlenie błędów-->
+            <ModelVisual3D x:Name="ClashHighlightModelVisual"/>
 
         </h:HelixViewport3D>
 

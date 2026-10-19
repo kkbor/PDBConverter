@@ -2,6 +2,7 @@
 using Microsoft.Win32;
 using PDBLibrary.Models;
 using PDBLibrary.Parsers;
+using PDBLibrary.Sevices;
 using PDBLibrary.Srevices;
 using PDBLibrary.Validation;
 using PDBViewer.Vizualization;
@@ -108,7 +109,7 @@ namespace PDBViewer
                 ErrorCountText.Text = "0";
                 WarningCountText.Text = "0";
 
-                RenderProtein();
+                RenderProtein(resetCamera: true);
                 BuildSequencePanel();
             }
             catch (Exception ex)
@@ -190,8 +191,19 @@ namespace PDBViewer
                 RenderProtein();
         }
 
-        private void RenderProtein()
+        private void RenderProtein(bool resetCamera = false)
         {
+            Point3D? savedPosition = null;
+            Vector3D? savedLookDirection = null;
+            Vector3D? savedUpDirection = null;
+
+            if (!resetCamera &&
+                Viewport.Camera is ProjectionCamera camera)
+            {
+                savedPosition = camera.Position;
+                savedLookDirection = camera.LookDirection;
+                savedUpDirection = camera.UpDirection;
+            }
             if (_protein == null)
                 return;
 
@@ -214,12 +226,30 @@ namespace PDBViewer
             HighlightModelVisual.Content = null;
             _highlightedResidue = null;
 
+            // Czerwony overlay kolizji zawsze czyścimy przy przebudowie geometrii -
+            // dotyczył konkretnych atomów z POPRZEDNIEGO stanu struktury; jeśli
+            // nadal jest aktualny, wywołujący (MutateButton_Click) ustawi go na
+            // nowo po tym wywołaniu, korzystając z atomów z nowej geometrii.
+            ClashHighlightModelVisual.Content = null;
+
             // jesli jakas reszta byla zaznaczona, po przebudowie geometrii
             // pokaz jej podswietlenie ponownie (ta sama instancja Residues przetrwala)
             if (_selectedResidue != null && _residueInfo.TryGetValue(_selectedResidue, out var info))
                 HighlightModelVisual.Content = _visualizer.BuildHighlightModel(info);
 
-            Viewport.ZoomExtents();
+            if (resetCamera)
+            {
+                Viewport.ZoomExtents();
+            }
+            else if (Viewport.Camera is ProjectionCamera currentCamera &&
+                     savedPosition.HasValue &&
+                     savedLookDirection.HasValue &&
+                     savedUpDirection.HasValue)
+            {
+                currentCamera.Position = savedPosition.Value;
+                currentCamera.LookDirection = savedLookDirection.Value;
+                currentCamera.UpDirection = savedUpDirection.Value;
+            }
         }
 
         // Plaska lista atomow + atom->reszta, uzywane przy klikaniu/najezdzaniu na model 3D
@@ -423,6 +453,8 @@ namespace PDBViewer
                 return;
             }
 
+            ClashHighlightModelVisual.Content = null;
+
             if (_selectedItem != null)
             {
                 _selectedItem.IsSelected = false;
@@ -451,6 +483,7 @@ namespace PDBViewer
                 HighlightModelVisual.Content =
                     _visualizer.BuildHighlightModel(info);
             }
+            FocusCameraOnResidue(residue);
         }
 
         private void ClearSelection()
@@ -462,6 +495,7 @@ namespace PDBViewer
             _selectedResidue = null;
             SelectedResidueText.Text = "brak (kliknij literę w sekwencji lub model 3D)";
             MutateButton.IsEnabled = false;
+            ClashHighlightModelVisual.Content = null;
         }
 
         // Centralny punkt stanu "najechania" - dziala identycznie niezaleznie od
@@ -498,11 +532,39 @@ namespace PDBViewer
             else
                 HighlightModelVisual.Content = null;
         }
+        private void FocusCameraOnResidue(Residues residue, double distance = 25.0)
+        {
+            if (residue.Atoms.Count == 0)
+                return;
+
+            if (Viewport.Camera is not ProjectionCamera camera)
+                return;
+
+            double centerX = residue.Atoms.Average(a => a.X);
+
+            double centerY = residue.Atoms.Average(a => a.Y);
+
+            double centerZ = residue.Atoms.Average(a => a.Z);
+
+            var target = new Point3D(centerX, centerY, centerZ);
+
+            Vector3D direction = camera.LookDirection;
+
+            if (direction.Length < 0.0001)
+                direction = new Vector3D(0, 0, -1);
+
+            direction.Normalize();
+
+            camera.Position = target - direction * distance;
+
+            camera.LookDirection = target - camera.Position;
+        }
 
         private void MutateButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_selectedResidue == null || _selectedItem == null)
+            if (_protein == null || _selectedResidue == null || _selectedItem == null)
                 return;
+
             if (!AminoAcidCodes.IsStandardAminoAcid(_selectedResidue.Name))
             {
                 MessageBox.Show(
@@ -518,13 +580,18 @@ namespace PDBViewer
                 return;
 
             string oldName = _selectedResidue.Name;
+            SideChainRotationResult rotationResult;
 
             try
             {
-                // ta metoda (Twoja wersja) sama usuwa stary lancuch boczny,
-                // zmienia nazwe reszty i dobudowuje nowy lancuch boczny
-                // z szablonu geometrii (CCD) nalozonego na szkielet
-                ResidueMutator.Mutate(_selectedResidue, newCode);
+                // ta metoda sama usuwa stary lancuch boczny, zmienia nazwe reszty
+                // i dobudowuje nowy lancuch boczny z szablonu geometrii (CCD)
+                // nalozonego na szkielet. Na koniec probuje go obrocic wokol
+                // wiazania CA-CB (SideChainOrientationResolver), jesli nowo
+                // zbudowany lancuch boczny koliduje przestrzennie z otoczeniem -
+                // dlatego potrzebuje teraz calego _protein, nie tylko reszty.
+                // Zwraca pelny log prob (nie tylko finalny wynik).
+                rotationResult = ResidueMutator.Mutate(_protein, _selectedResidue, newCode);
             }
             catch (Exception ex)
             {
@@ -539,9 +606,73 @@ namespace PDBViewer
             // atomy sie zmienily -> trzeba przebudowac geometrie 3D
             RenderProtein();
 
-            SelectedResidueText.Text = $"{_selectedResidue.Name} {_selectedResidue.Id}";
+            SelectedResidueText.Text = rotationResult.FoundBetter
+                ? $"{_selectedResidue.Name} {_selectedResidue.Id} " +
+                  $"(wykryto kolizję przestrzenną - obrócono łańcuch boczny o {rotationResult.FinalAngleDegrees:F0}°)"
+                : rotationResult.HadInitialClash
+                    ? $"{_selectedResidue.Name} {_selectedResidue.Id} " +
+                      $"(wykryto kolizję przestrzenną - żaden obrót jej nie usunął)"
+                    : $"{_selectedResidue.Name} {_selectedResidue.Id}";
 
             RunMutationValidation(_selectedResidue);
+
+            // Jeżeli konformacja z szablonu kolidowała, dopisujemy do LISTY
+            // walidacji (ValidationIssuesList - ta sama, przewijana, co prawdziwe
+            // błędy/ostrzeżenia) log KOLEJNYCH prób obrotu: najpierw błąd przy
+            // oryginalnej konformacji, potem kolejne błędy przy kolejnych obrotach.
+            // Celowo NIE dopisujemy tego do ValidationSummaryText (zwykły TextBlock
+            // bez przewijania) - przy wielu próbach rozciągałby panel w nieskończoność.
+            if (rotationResult.Attempted && rotationResult.HadInitialClash)
+            {
+                AddInfoLine("— Log prób obrotu łańcucha bocznego (CA-CB), by usunąć kolizję: —");
+
+                foreach (var attempt in rotationResult.Attempts)
+                    AddInfoLine("  • " + attempt);
+
+                AddInfoLine(rotationResult.FoundBetter
+                    ? $"→ wybrano obrót {rotationResult.FinalAngleDegrees:F0}°."
+                    : "→ żaden obrót nie poprawił sytuacji - zostawiono konformację z szablonu.");
+
+                // Jeśli przy WYBRANYM obrocie coś jednak zostało (np. mniej błędów,
+                // ale nie zero), pokazujemy dokładną treść tego, co zostało - a nie
+                // tylko samą liczbę w logu powyżej. To jest dokładnie to ostrzeżenie,
+                // przy którym walidacja scoped (RunMutationValidation) się zatrzymała.
+                var finalAttempt = rotationResult.Attempts
+                    .FirstOrDefault(a => a.AngleDegrees == rotationResult.FinalAngleDegrees);
+
+                if (finalAttempt.Issues != null && finalAttempt.Issues.Count > 0)
+                {
+                    AddInfoLine("Pozostałe problemy przy wybranym obrocie:");
+
+                    foreach (var issue in finalAttempt.Issues)
+                        _validationIssues.Add(new ValidationIssueViewModel(issue));
+                    // Podświetlamy na czerwono DOKŁADNIE te atomy, które nadal
+                    // kolidują przy ostatecznie wybranym obrocie (geometria w
+                    // _residueInfo już odpowiada tej konformacji, bo RenderProtein()
+                    // przebudowała ją po tym, jak ResidueMutator.Mutate zostawił
+                    // atomy reszty w najlepszej znalezionej pozycji).
+                    var clashingAtoms = finalAttempt.Issues
+                        .SelectMany(i => new[] { i.Atom, i.AtomB })
+                        .Where(a => a != null)
+                        .Select(a => a!)
+                        .Distinct();
+
+                    ClashHighlightModelVisual.Content = _visualizer.BuildClashHighlightModel(clashingAtoms);
+                }
+            }
+        }
+
+        // Dopisuje jedną linię "informacyjną" (nie błąd/ostrzeżenie ze struktury)
+        // na KONIEC listy walidacji - ValidationIssuesList jest już przewijana
+        // (ScrollViewer wewnątrz), więc dowolnie długi log nie rozsadza panelu.
+        private void AddInfoLine(string message)
+        {
+            _validationIssues.Add(new ValidationIssueViewModel(new ValidationIssue
+            {
+                Severity = ValidationSeverity.Info,
+                Message = message,
+                Residue = _selectedResidue
+            }));
         }
         private void RunMutationValidation(Residues changedResidue)
         {
