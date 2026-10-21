@@ -52,12 +52,16 @@ namespace PDBViewer
 
         // wyniki ostatniej walidacji struktury (do wyswietlenia w panelu po prawej)
         private readonly ObservableCollection<ValidationIssueViewModel> _validationIssues = new();
+        // wyniki aktualnego zapytania w wyszukiwarce aminokwasow/reszt
+        private readonly ObservableCollection<ResidueSearchResultItem> _residueSearchResults = new();
+
 
         public MainWindow()
         {
             InitializeComponent();
             SequenceItemsControl.ItemsSource = _chainSequenceItems;
             ValidationIssuesList.ItemsSource = _validationIssues;
+            ResidueSearchResultsList.ItemsSource = _residueSearchResults;
             PopulateMutateCombo();
         }
 
@@ -111,6 +115,8 @@ namespace PDBViewer
 
                 RenderProtein(resetCamera: true);
                 BuildSequencePanel();
+                ResidueSearchBox.Clear();
+                RunResidueSearch(string.Empty);
             }
             catch (Exception ex)
             {
@@ -357,7 +363,190 @@ namespace PDBViewer
             item = null!;
             return false;
         }
+        // --- Wyszukiwarka aminokwasow/reszt ---
 
+        private void ResidueSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            RunResidueSearch(ResidueSearchBox.Text);
+        }
+        private void ResidueSearchBox_GotFocus(object sender, RoutedEventArgs e)
+        {
+            RunResidueSearch(ResidueSearchBox.Text);
+        }
+        private void ResidueSearchBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            // Enter -> przejdz od razu do pierwszego wyniku, bez koniecznosci
+            // klikania na liste myszka.
+            if (e.Key == Key.Enter && _residueSearchResults.Count > 0)
+            {
+                ResidueSearchResultsList.SelectedIndex = 0;
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                ResidueSearchBox.Clear();
+                e.Handled = true;
+            }
+        }
+
+        // Klikniecie (lub Enter -> SelectedIndex = 0 powyzej) na wynik wyszukiwania
+        // dziala identycznie jak klikniecie reszty w panelu sekwencji: zaznacza ja
+        // (SelectResidue - ktore samo centruje kamere 3D na reszcie), dodatkowo
+        // przewijajac do niej panel sekwencji (ktory, w przeciwienstwie do 3D,
+        // sam sie nie przewija).
+        private void ResidueSearchResultsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ResidueSearchResultsList.SelectedItem is ResidueSearchResultItem result)
+            {
+                SelectResidue(result.Residue);
+                ScrollToResidueInSequencePanel(result.Residue);
+                ResidueSearchResultsList.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        // Filtruje _sequenceItemByResidue (a wiec wylacznie standardowe aminokwasy -
+        // dokladnie te, ktore widac w panelu sekwencji i ktore mozna podmienic)
+        // wedlug zapytania:
+        //   - samo cyfry (np. "25")  -> numer reszty, wszystkie lancuchy
+        //   - cokolwiek innego       -> kod 3-literowy / 1-literowy / fragment pelnej nazwy
+        private void RunResidueSearch(string query)
+        {
+            _residueSearchResults.Clear();
+
+            query = query?.Trim() ?? string.Empty;
+
+            if (query.Length == 0 || _protein == null)
+            {
+                ResidueSearchResultsList.Visibility = Visibility.Collapsed;
+                ResidueSearchHintText.Text = string.Empty;
+                return;
+            }
+
+            List<ResidueSearchResultItem> matches;
+
+            if (int.TryParse(query, out int residueNumber))
+            {
+                matches = _sequenceItemByResidue.Values
+                    .Where(item => item.Residue != null && item.Chain != null && item.Residue.Id == residueNumber)
+                    .OrderBy(item => item.Chain!.Id)
+                    .Select(item => new ResidueSearchResultItem(item.Chain!, item.Residue!))
+                    .ToList();
+            }
+            else
+            {
+                matches = _sequenceItemByResidue.Values
+                    .Where(item => item.Residue != null && item.Chain != null && MatchesAminoAcidQuery(item.Residue.Name, query))
+                    .OrderBy(item => item.Chain!.Id)
+                    .ThenBy(item => item.Residue!.Id)
+                    .Select(item => new ResidueSearchResultItem(item.Chain!, item.Residue!))
+                    .ToList();
+            }
+
+            foreach (var match in matches)
+                _residueSearchResults.Add(match);
+
+            ResidueSearchResultsList.Visibility = matches.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            ResidueSearchHintText.Text = matches.Count switch
+            {
+                0 => "brak wyników",
+                1 => "1 wynik",
+                _ => $"{matches.Count} wyników"
+            };
+        }
+        // Dopasowanie tekstowe zapytania do aminokwasu - sprawdza kolejno:
+        // fragment 3-literowego kodu, dokladny 1-literowy kod (tylko gdy
+        // zapytanie to pojedyncza litera) i fragment pelnej polskiej nazwy.
+        private static bool MatchesAminoAcidQuery(string residueName, string query)
+        {
+            if (string.IsNullOrWhiteSpace(residueName))
+                return false;
+
+            if (residueName.Contains(query, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (query.Length == 1 &&
+                char.ToUpperInvariant(AminoAcidCodes.GetOneLetterCode(residueName)) == char.ToUpperInvariant(query[0]))
+                return true;
+
+            var entry = AminoAcidCodes.StandardAminoAcids
+                .FirstOrDefault(x => string.Equals(x.Code, residueName, StringComparison.OrdinalIgnoreCase));
+
+            return entry.Name != null && entry.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Przewija panel sekwencji (pionowo do wiersza odpowiedniego lancucha,
+        // a wewnatrz niego poziomo do konkretnej reszty) tak, by wskazana
+        // reszta byla widoczna, bez wzgledu na to, ze lista reszt w kazdym
+        // lancuchu jest zwirtualizowana (VirtualizingStackPanel).
+        private void ScrollToResidueInSequencePanel(Residues residue)
+        {
+            if (!_sequenceItemByResidue.TryGetValue(residue, out var seqItem) || seqItem.Chain == null)
+                return;
+
+            var chainItem = _chainSequenceItems.FirstOrDefault(c => c.ChainId == seqItem.Chain.Id);
+            if (chainItem == null)
+                return;
+
+            // Upewnij sie, ze kontenery wierszy lancuchow (gorny ItemsControl NIE
+            // jest zwirtualizowany) sa juz wygenerowane dla aktualnego stanu kolekcji.
+            SequenceItemsControl.UpdateLayout();
+
+            if (SequenceItemsControl.ItemContainerGenerator.ContainerFromItem(chainItem) is not FrameworkElement chainContainer)
+                return;
+
+            // Scroll PIONOWY do wiersza tego lancucha - kontener zawsze istnieje
+            // (brak wirtualizacji na tym poziomie), wiec zwykle BringIntoView wystarcza.
+            chainContainer.BringIntoView();
+
+            // Wewnatrz wiersza lancucha reszty sa renderowane przez zagniezdzony,
+            // POZIOMO przewijany i ZWIRTUALIZOWANY ItemsControl - trzeba go znalezc
+            // w drzewie wizualnym tego konkretnego wiersza.
+            var innerItemsControl = FindVisualDescendant<ItemsControl>(chainContainer);
+            if (innerItemsControl == null)
+                return;
+
+            innerItemsControl.UpdateLayout();
+
+            int residueIndex = chainItem.Residues.IndexOf(seqItem);
+            if (residueIndex < 0)
+                return;
+
+            var innerScrollViewer = FindVisualAncestor<ScrollViewer>(innerItemsControl);
+
+            // Domyslny ScrollUnit dla VirtualizingStackPanel to "Item" (nie piksele),
+            // wiec offset poziomy to po prostu indeks reszty w lancuchu - z malym
+            // marginesem, zeby znaleziona reszta nie byla dokladnie na samej krawedzi.
+            innerScrollViewer?.ScrollToHorizontalOffset(Math.Max(0, residueIndex - 3));
+        }
+
+        private static T? FindVisualDescendant<T>(DependencyObject parent) where T : DependencyObject
+        {
+            int count = VisualTreeHelper.GetChildrenCount(parent);
+            for (int i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+
+                if (child is T typed)
+                    return typed;
+
+                var found = FindVisualDescendant<T>(child);
+                if (found != null)
+                    return found;
+            }
+
+            return null;
+        }
+
+        private static T? FindVisualAncestor<T>(DependencyObject child) where T : DependencyObject
+        {
+            var parent = VisualTreeHelper.GetParent(child);
+
+            while (parent != null && parent is not T)
+                parent = VisualTreeHelper.GetParent(parent);
+
+            return parent as T;
+        }
         // --- Najechanie/klikniecie bezposrednio na model 3D ---
 
         private void Viewport_MouseMove(object sender, MouseEventArgs e)

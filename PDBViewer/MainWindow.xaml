@@ -5,253 +5,318 @@
         xmlns:local="clr-namespace:PDBViewer"
         Title="PDB Editor - Wizualizacja 3D" Height="720" Width="1080">
 
-    <DockPanel>
+    <!-- Grid zamiast samego DockPanel: pozwala na GridSplitter miedzy gornymi
+         panelami (pasek narzedzi / wyszukiwarka / sekwencja / podmiana) a
+         widokiem 3D, zeby mozna bylo przeciagnieciem zmniejszyc/zwiekszyc
+         obszar 3D kosztem/na korzysc gornych paneli. -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="260" MinHeight="90"/>
+            <RowDefinition Height="6"/>
+            <RowDefinition Height="*" MinHeight="120"/>
+        </Grid.RowDefinitions>
 
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Background="#F0F0F0">
-            <Button x:Name="OpenButton" Content="Otwórz plik PDB..." Padding="8,4" Click="OpenButton_Click"/>
-            <Button x:Name="SaveButton" Content="Zapisz jako PDB..." Padding="8,4" Margin="8,0,0,0"
-                    Click="SaveButton_Click" IsEnabled="False"/>
-            <Button x:Name="ValidateButton" Content="Waliduj strukturę" Padding="8,4" Margin="8,0,0,0"
-                    Click="ValidateButton_Click" IsEnabled="False"/>
-            <TextBlock x:Name="InfoText" VerticalAlignment="Center" Margin="16,0,0,0"
-                       Text="Brak wczytanej struktury"/>
+        <!-- === GORNE PANELE (przeciagalna wysokosc) === -->
+        <DockPanel Grid.Row="0">
 
-            <TextBlock Text="Styl:" VerticalAlignment="Center" Margin="24,0,4,0"/>
-            <ComboBox x:Name="StyleCombo" Width="140" SelectedIndex="0"
-                      SelectionChanged="StyleCombo_SelectionChanged">
-                <ComboBoxItem Content="Ball and Stick"/>
-                <ComboBoxItem Content="Tylko atomy"/>
-                <ComboBoxItem Content="Szkielet (cienki)"/>
-                <ComboBoxItem Content="Cartoon"/>
-            </ComboBox>
-        </StackPanel>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Background="#F0F0F0">
+                <Button x:Name="OpenButton" Content="Otwórz plik PDB..." Padding="8,4" Click="OpenButton_Click"/>
+                <Button x:Name="SaveButton" Content="Zapisz jako PDB..." Padding="8,4" Margin="8,0,0,0"
+                        Click="SaveButton_Click" IsEnabled="False"/>
+                <Button x:Name="ValidateButton" Content="Waliduj strukturę" Padding="8,4" Margin="8,0,0,0"
+                        Click="ValidateButton_Click" IsEnabled="False"/>
+                <TextBlock x:Name="InfoText" VerticalAlignment="Center" Margin="16,0,0,0"
+                           Text="Brak wczytanej struktury"/>
 
-        <!-- Panel sekwencji aminokwasow - wirtualizowany, jeden poziomy, przewijalny pasek -->
-        <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="0,1,0,1"
-                Background="#FAFAFA" Padding="8">
-            <StackPanel>
-                <TextBlock x:Name="SequenceHeaderText" Text="Sekwencja: -" FontWeight="Bold" Margin="0,0,0,4"/>
-
-                <ScrollViewer VerticalScrollBarVisibility="Auto"
-              HorizontalScrollBarVisibility="Disabled"
-              MaxHeight="180">
-
-                    <ItemsControl x:Name="SequenceItemsControl">
-
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-
-                                <StackPanel Margin="0,2,0,6">
-
-                                    <!-- Nazwa łańcucha -->
-                                    <TextBlock Text="{Binding ChainId, StringFormat=Łańcuch {0}:}"
-                               FontWeight="SemiBold"
-                               Margin="0,0,0,2"/>
-
-                                    <!-- Każdy łańcuch ma własne przewijanie poziome -->
-                                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                  VerticalScrollBarVisibility="Disabled"
-                                  CanContentScroll="True">
-
-                                        <ItemsControl ItemsSource="{Binding Residues}"
-                                      VirtualizingPanel.IsVirtualizing="True"
-                                      VirtualizingPanel.VirtualizationMode="Recycling"
-                                      ScrollViewer.CanContentScroll="True">
-
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <VirtualizingStackPanel Orientation="Horizontal"/>
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-
-                                            <ItemsControl.ItemContainerStyle>
-                                                <Style TargetType="ContentPresenter">
-
-                                                    <EventSetter Event="MouseEnter"
-                                                 Handler="SequenceItem_MouseEnter"/>
-
-                                                    <EventSetter Event="MouseLeave"
-                                                 Handler="SequenceItem_MouseLeave"/>
-
-                                                    <EventSetter Event="MouseLeftButtonUp"
-                                                 Handler="SequenceItem_Click"/>
-
-                                                </Style>
-                                            </ItemsControl.ItemContainerStyle>
-
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate DataType="{x:Type local:ResidueSequenceItem}">
-
-                                                    <Border x:Name="ItemBorder"
-                                            BorderBrush="#E6E6E6"
-                                            BorderThickness="1"
-                                            CornerRadius="3"
-                                            Margin="1"
-                                            Padding="4,1,4,1"
-                                            Background="White"
-                                            Cursor="Hand"
-                                            ToolTip="{Binding Tooltip}">
-
-                                                        <TextBlock Text="{Binding Letter}"
-                                                   FontFamily="Consolas"
-                                                   FontSize="14"/>
-
-                                                    </Border>
-
-                                                    <DataTemplate.Triggers>
-
-                                                        <DataTrigger Binding="{Binding IsHighlighted}"
-                                                     Value="True">
-                                                            <Setter TargetName="ItemBorder"
-                                                    Property="Background"
-                                                    Value="#FFE8A3"/>
-                                                        </DataTrigger>
-
-                                                        <DataTrigger Binding="{Binding IsSelected}"
-                                                     Value="True">
-                                                            <Setter TargetName="ItemBorder"
-                                                    Property="Background"
-                                                    Value="#FFCC80"/>
-
-                                                            <Setter TargetName="ItemBorder"
-                                                    Property="BorderBrush"
-                                                    Value="#F57C00"/>
-
-                                                            <Setter TargetName="ItemBorder"
-                                                    Property="BorderThickness"
-                                                    Value="2"/>
-                                                        </DataTrigger>
-
-                                                    </DataTemplate.Triggers>
-
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-
-                                        </ItemsControl>
-
-                                    </ScrollViewer>
-
-                                </StackPanel>
-
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-
-                    </ItemsControl>
-
-                </ScrollViewer>
-
-                <TextBlock x:Name="HoverInfoText" Margin="0,4,0,0" FontStyle="Italic"
-                           Text=" " Foreground="#555555"/>
+                <TextBlock Text="Styl:" VerticalAlignment="Center" Margin="24,0,4,0"/>
+                <ComboBox x:Name="StyleCombo" Width="140" SelectedIndex="0"
+                          SelectionChanged="StyleCombo_SelectionChanged">
+                    <ComboBoxItem Content="Ball and Stick"/>
+                    <ComboBoxItem Content="Tylko atomy"/>
+                    <ComboBoxItem Content="Szkielet (cienki)"/>
+                    <ComboBoxItem Content="Cartoon"/>
+                </ComboBox>
             </StackPanel>
-        </Border>
 
-        <!-- Podmiana aminokwasu: dziala na reszcie zaznaczonej klikniectem w sekwencji powyzej -->
-        <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1"
-                Background="#F5F5F5" Padding="8">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="Wybrana reszta: " VerticalAlignment="Center" FontWeight="SemiBold"/>
-                <TextBlock x:Name="SelectedResidueText" Text="brak (kliknij literę w sekwencji lub model 3D)"
-                           VerticalAlignment="Center" Margin="0,0,20,0"/>
+            <!-- Wyszukiwarka aminokwasow/reszt: po numerze reszty (np. "25") -> wszystkie
+                 aminokwasy na tej pozycji we wszystkich lancuchach; po kodzie/nazwie
+                 aminokwasu (np. "ALA", "A", "alanina") -> wszystkie jego wystapienia.
+                 Lista wynikow chowa sie automatycznie po wybraniu wyniku i pojawia
+                 sie ponownie po powrocie do pola (GotFocus) albo zmianie tekstu. -->
+            <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1"
+                    Background="#FAFAFA" Padding="8">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Szukaj aminokwasu/reszty:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="ResidueSearchBox" Width="160" VerticalAlignment="Center"
+                                 TextChanged="ResidueSearchBox_TextChanged"
+                                 KeyDown="ResidueSearchBox_KeyDown"
+                                 GotFocus="ResidueSearchBox_GotFocus"
+                                 ToolTip="Kod aminokwasu (np. ALA albo A) lub numer reszty (np. 25)"/>
+                        <TextBlock x:Name="ResidueSearchHintText" VerticalAlignment="Center"
+                                   Margin="10,0,0,0" Foreground="#777777" FontStyle="Italic" Text=""/>
+                    </StackPanel>
 
-                <TextBlock Text="Zamień na:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <ComboBox x:Name="MutateCombo" Width="190" VerticalAlignment="Center"/>
-
-                <Button x:Name="MutateButton" Content="Podmień aminokwas" Margin="8,0,0,0" Padding="8,4"
-                        Click="MutateButton_Click" IsEnabled="False"/>
-            </StackPanel>
-        </Border>
-
-        <!-- Panel wynikow walidacji -->
-        <Expander x:Name="ValidationExpander"
-          DockPanel.Dock="Bottom"
-          ExpandDirection="Up"
-          IsExpanded="False"
-          Background="#F0F0F0"
-          Foreground="Black"
-          BorderBrush="#F0F0F0"
-          BorderThickness="0,1,0,0">
-
-            <!-- Naglowek Expandera: licznik bledow i ostrzezen widoczny po zwinieciu -->
-            <Expander.Header>
-                <StackPanel Orientation="Horizontal" Margin="4,2">
-                    <!-- Błędy (Czerwone kółko / X) -->
-                    <TextBlock Text="❌" FontSize="13" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                    <TextBlock x:Name="ErrorCountText" Text="0" Foreground="Black" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Margin="0,0,16,0"/>
-
-                    <!-- Ostrzeżenia (Żółty trójkąt) -->
-                    <TextBlock Text="⚠️" FontSize="13" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                    <TextBlock x:Name="WarningCountText" Text="1" Foreground="Black" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
-                </StackPanel>
-            </Expander.Header>
-
-            <!-- Zawartosc wysuwana po kliknieciu -->
-            <Border Height="180" Background="#252526" Padding="8">
-                <DockPanel>
-                    <TextBlock x:Name="ValidationSummaryText"
-                       DockPanel.Dock="Top"
-                       Margin="0,0,0,8"
-                       Text="Brak uruchomionej walidacji."
-                       TextWrapping="Wrap"
-                       Foreground="#CCCCCC"
-                       FontSize="12"/>
-
-                    <ListBox x:Name="ValidationIssuesList"
-                     SelectionChanged="ValidationIssuesList_SelectionChanged"
-                     Background="Transparent"
-                     BorderThickness="0"
-                     ScrollViewer.VerticalScrollBarVisibility="Auto">
-
+                    <ListBox x:Name="ResidueSearchResultsList"
+                             Margin="0,4,0,0"
+                             MaxHeight="150"
+                             Visibility="Collapsed"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             SelectionChanged="ResidueSearchResultsList_SelectionChanged">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Margin="0,4,0,4">
-                                    <TextBlock Text="{Binding SeverityLabel}"
-                                       FontWeight="Bold"
-                                       FontSize="11"
-                                       Foreground="{Binding SeverityBrush}"/>
-
-                                    <TextBlock Text="{Binding Message}"
-                                       TextWrapping="Wrap"
-                                       Foreground="#DDDDDD"
-                                       FontSize="12"/>
-                                </StackPanel>
+                                <TextBlock Text="{Binding DisplayText}" FontFamily="Consolas" Padding="2"/>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                </StackPanel>
+            </Border>
+
+            <!-- Podmiana aminokwasu: dziala na reszcie zaznaczonej klikniectem w sekwencji
+                 ponizej. Zadokowana na dole TEGO panelu (tuz nad splitterem), zeby
+                 panel sekwencji (bez Dock - wypelnia reszte) mogl rosnac/kurczyc sie
+                 wraz z przeciaganiem splittera. -->
+            <Border DockPanel.Dock="Bottom" BorderBrush="#CCCCCC" BorderThickness="0,1,0,0"
+                    Background="#F5F5F5" Padding="8">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Wybrana reszta: " VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="SelectedResidueText" Text="brak (kliknij literę w sekwencji lub model 3D)"
+                               VerticalAlignment="Center" Margin="0,0,20,0"/>
+
+                    <TextBlock Text="Zamień na:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <ComboBox x:Name="MutateCombo" Width="190" VerticalAlignment="Center"/>
+
+                    <Button x:Name="MutateButton" Content="Podmień aminokwas" Margin="8,0,0,0" Padding="8,4"
+                            Click="MutateButton_Click" IsEnabled="False"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Panel sekwencji aminokwasow - wirtualizowany, jeden poziomy, przewijalny pasek.
+                 Bez DockPanel.Dock -> wypelnia cala pozostala wysokosc Row0, wiec
+                 przeciaganie splittera realnie zmienia ile reszt widac na raz. -->
+            <Border BorderBrush="#CCCCCC" BorderThickness="0,1,0,0"
+                    Background="#FAFAFA" Padding="8">
+                <DockPanel>
+                    <TextBlock x:Name="SequenceHeaderText" DockPanel.Dock="Top"
+                               Text="Sekwencja: -" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="HoverInfoText" DockPanel.Dock="Bottom" Margin="0,4,0,0" FontStyle="Italic"
+                               Text=" " Foreground="#555555"/>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+
+                        <ItemsControl x:Name="SequenceItemsControl">
+
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+
+                                    <StackPanel Margin="0,2,0,6">
+
+                                        <!-- Nazwa łańcucha -->
+                                        <TextBlock Text="{Binding ChainId, StringFormat=Łańcuch {0}:}"
+                                   FontWeight="SemiBold"
+                                   Margin="0,0,0,2"/>
+
+                                        <!-- Każdy łańcuch ma własne przewijanie poziome -->
+                                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Disabled"
+                                      CanContentScroll="True">
+
+                                            <ItemsControl ItemsSource="{Binding Residues}"
+                                          VirtualizingPanel.IsVirtualizing="True"
+                                          VirtualizingPanel.VirtualizationMode="Recycling"
+                                          ScrollViewer.CanContentScroll="True">
+
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <VirtualizingStackPanel Orientation="Horizontal"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+
+                                                <ItemsControl.ItemContainerStyle>
+                                                    <Style TargetType="ContentPresenter">
+
+                                                        <EventSetter Event="MouseEnter"
+                                                     Handler="SequenceItem_MouseEnter"/>
+
+                                                        <EventSetter Event="MouseLeave"
+                                                     Handler="SequenceItem_MouseLeave"/>
+
+                                                        <EventSetter Event="MouseLeftButtonUp"
+                                                     Handler="SequenceItem_Click"/>
+
+                                                    </Style>
+                                                </ItemsControl.ItemContainerStyle>
+
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate DataType="{x:Type local:ResidueSequenceItem}">
+
+                                                        <Border x:Name="ItemBorder"
+                                                BorderBrush="#E6E6E6"
+                                                BorderThickness="1"
+                                                CornerRadius="3"
+                                                Margin="1"
+                                                Padding="4,1,4,1"
+                                                Background="White"
+                                                Cursor="Hand"
+                                                ToolTip="{Binding Tooltip}">
+
+                                                            <TextBlock Text="{Binding Letter}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="14"/>
+
+                                                        </Border>
+
+                                                        <DataTemplate.Triggers>
+
+                                                            <DataTrigger Binding="{Binding IsHighlighted}"
+                                                         Value="True">
+                                                                <Setter TargetName="ItemBorder"
+                                                        Property="Background"
+                                                        Value="#FFE8A3"/>
+                                                            </DataTrigger>
+
+                                                            <DataTrigger Binding="{Binding IsSelected}"
+                                                         Value="True">
+                                                                <Setter TargetName="ItemBorder"
+                                                        Property="Background"
+                                                        Value="#FFCC80"/>
+
+                                                                <Setter TargetName="ItemBorder"
+                                                        Property="BorderBrush"
+                                                        Value="#F57C00"/>
+
+                                                                <Setter TargetName="ItemBorder"
+                                                        Property="BorderThickness"
+                                                        Value="2"/>
+                                                            </DataTrigger>
+
+                                                        </DataTemplate.Triggers>
+
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+
+                                            </ItemsControl>
+
+                                        </ScrollViewer>
+
+                                    </StackPanel>
+
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+
+                        </ItemsControl>
+
+                    </ScrollViewer>
                 </DockPanel>
             </Border>
-        </Expander>
 
-        <h:HelixViewport3D x:Name="Viewport"
-                   DockPanel.Dock="Bottom"
-                   ZoomExtentsWhenLoaded="True"
-                   ShowCoordinateSystem="True"
-                   ShowViewCube="True"
-                   IsPanEnabled="True"
-                   IsRotationEnabled="True"
-                   IsZoomEnabled="True"
-                   RotateGesture="LeftClick"
-                   PanGesture="RightClick"
-                   MouseMove="Viewport_MouseMove"
-                   MouseLeave="Viewport_MouseLeave"
-                   MouseLeftButtonUp="Viewport_MouseLeftButtonUp">
-        
-            <h:HelixViewport3D.DefaultCamera>
-                <PerspectiveCamera Position="0,0,50" LookDirection="0,0,-1" UpDirection="0,1,0"/>
-            </h:HelixViewport3D.DefaultCamera>
+        </DockPanel>
 
-            <h:SunLight/>
+        <!-- === SPLITTER: przeciagnij, by zmniejszyc/zwiekszyc gorne panele kosztem widoku 3D === -->
+        <GridSplitter Grid.Row="1"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      Height="6"
+                      Background="#DDDDDD"
+                      Cursor="SizeNS"
+                      ShowsPreview="False"/>
 
-            <!-- Scalony, zamrozony (Freeze) model calego bialka - nigdy nie modyfikowany
-                 po zbudowaniu, co jest kluczowe dla wydajnosci przy duzych strukturach. -->
-            <ModelVisual3D x:Name="ProteinModelVisual"/>
+        <!-- === WIDOK 3D + PANEL WALIDACJI (ponizej splittera) === -->
+        <DockPanel Grid.Row="2">
 
-            <!-- Osobna, bardzo lekka warstwa tylko na podswietlenie aktualnie
-                 najechanej reszty - podmieniana w calosci przy kazdym hover. -->
-            <ModelVisual3D x:Name="HighlightModelVisual"/>
-            <!-- Osobna, warstwa tylko na podswietlenie błędów-->
-            <ModelVisual3D x:Name="ClashHighlightModelVisual"/>
+            <!-- Panel wynikow walidacji -->
+            <Expander x:Name="ValidationExpander"
+              DockPanel.Dock="Bottom"
+              ExpandDirection="Up"
+              IsExpanded="False"
+              Background="#F0F0F0"
+              Foreground="Black"
+              BorderBrush="#F0F0F0"
+              BorderThickness="0,1,0,0">
 
-        </h:HelixViewport3D>
+                <!-- Naglowek Expandera: licznik bledow i ostrzezen widoczny po zwinieciu -->
+                <Expander.Header>
+                    <StackPanel Orientation="Horizontal" Margin="4,2">
+                        <!-- Błędy (Czerwone kółko / X) -->
+                        <TextBlock Text="❌" FontSize="13" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBlock x:Name="ErrorCountText" Text="0" Foreground="Black" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Margin="0,0,16,0"/>
 
-    </DockPanel>
+                        <!-- Ostrzeżenia (Żółty trójkąt) -->
+                        <TextBlock Text="⚠️" FontSize="13" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBlock x:Name="WarningCountText" Text="1" Foreground="Black" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Expander.Header>
+
+                <!-- Zawartosc wysuwana po kliknieciu -->
+                <Border Height="180" Background="#252526" Padding="8">
+                    <DockPanel>
+                        <TextBlock x:Name="ValidationSummaryText"
+                           DockPanel.Dock="Top"
+                           Margin="0,0,0,8"
+                           Text="Brak uruchomionej walidacji."
+                           TextWrapping="Wrap"
+                           Foreground="#CCCCCC"
+                           FontSize="12"/>
+
+                        <ListBox x:Name="ValidationIssuesList"
+                         SelectionChanged="ValidationIssuesList_SelectionChanged"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,4,0,4">
+                                        <TextBlock Text="{Binding SeverityLabel}"
+                                           FontWeight="Bold"
+                                           FontSize="11"
+                                           Foreground="{Binding SeverityBrush}"/>
+
+                                        <TextBlock Text="{Binding Message}"
+                                           TextWrapping="Wrap"
+                                           Foreground="#DDDDDD"
+                                           FontSize="12"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </Border>
+            </Expander>
+
+            <h:HelixViewport3D x:Name="Viewport"
+                       ZoomExtentsWhenLoaded="True"
+                       ShowCoordinateSystem="True"
+                       ShowViewCube="True"
+                       IsPanEnabled="True"
+                       IsRotationEnabled="True"
+                       IsZoomEnabled="True"
+                       RotateGesture="LeftClick"
+                       PanGesture="RightClick"
+                       MouseMove="Viewport_MouseMove"
+                       MouseLeave="Viewport_MouseLeave"
+                       MouseLeftButtonUp="Viewport_MouseLeftButtonUp">
+
+                <h:HelixViewport3D.DefaultCamera>
+                    <PerspectiveCamera Position="0,0,50" LookDirection="0,0,-1" UpDirection="0,1,0"/>
+                </h:HelixViewport3D.DefaultCamera>
+
+                <h:SunLight/>
+
+                <!-- Scalony, zamrozony (Freeze) model calego bialka - nigdy nie modyfikowany
+                     po zbudowaniu, co jest kluczowe dla wydajnosci przy duzych strukturach. -->
+                <ModelVisual3D x:Name="ProteinModelVisual"/>
+
+                <!-- Osobna, bardzo lekka warstwa tylko na podswietlenie aktualnie
+                     najechanej reszty - podmieniana w calosci przy kazdym hover. -->
+                <ModelVisual3D x:Name="HighlightModelVisual"/>
+                <!-- Osobna, warstwa tylko na podswietlenie błędów-->
+                <ModelVisual3D x:Name="ClashHighlightModelVisual"/>
+
+            </h:HelixViewport3D>
+
+        </DockPanel>
+
+    </Grid>
 </Window>
