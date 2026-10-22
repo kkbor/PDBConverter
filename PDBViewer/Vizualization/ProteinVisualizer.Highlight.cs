@@ -29,7 +29,10 @@ namespace PDBViewer.Vizualization
 
             foreach (var atom in info.Atoms)
             {
-                AddAtomSphere(mesh, atom, 8, 6);
+                string element = NormalizeElement(atom.Element);
+                double baseRadius = GetDisplayAtomRadius(element, _lastStyle);
+
+                AddAtomSphere(mesh, atom, baseRadius * 1.2, 8, 6);
             }
 
             foreach (var bond in info.Bonds)
@@ -98,9 +101,7 @@ namespace PDBViewer.Vizualization
             {
                 string element = NormalizeElement(atom.Element);
 
-                double baseRadius = AtomRadii.TryGetValue(element, out double r)
-                        ? r
-                        : DefaultAtomRadius;
+                double baseRadius = GetDisplayAtomRadius(element, _lastStyle);
 
                 AddAtomSphere(mesh, atom, baseRadius * 1.35, 10, 8);
             }

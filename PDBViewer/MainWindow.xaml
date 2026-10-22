@@ -29,11 +29,11 @@
                            Text="Brak wczytanej struktury"/>
 
                 <TextBlock Text="Styl:" VerticalAlignment="Center" Margin="24,0,4,0"/>
-                <ComboBox x:Name="StyleCombo" Width="140" SelectedIndex="0"
+                <ComboBox x:Name="StyleCombo" Width="160" SelectedIndex="0"
                           SelectionChanged="StyleCombo_SelectionChanged">
                     <ComboBoxItem Content="Ball and Stick"/>
-                    <ComboBoxItem Content="Tylko atomy"/>
-                    <ComboBoxItem Content="Szkielet (cienki)"/>
+                    <ComboBoxItem Content="Stick"/>
+                    <ComboBoxItem Content="Atomy (realistyczne)"/>
                     <ComboBoxItem Content="Cartoon"/>
                 </ComboBox>
             </StackPanel>

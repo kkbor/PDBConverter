@@ -11,7 +11,7 @@ namespace PDBViewer.Vizualization
     public enum VisualizationStyle
     {
         BallAndStick,
-        SpheresOnly,
+        Atoms,
         Wireframe,
         Cartoon
     }

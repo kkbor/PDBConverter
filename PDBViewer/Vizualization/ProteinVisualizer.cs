@@ -30,6 +30,7 @@ namespace PDBViewer.Vizualization
     /// </summary>
     public partial class ProteinVisualizer
     {
+        private VisualizationStyle _lastStyle = VisualizationStyle.BallAndStick;
 
         private static readonly Dictionary<string, Color> CpkColors = new()
         {
@@ -45,6 +46,9 @@ namespace PDBViewer.Vizualization
             { "MG", Color.FromRgb(34, 139, 34) }
         };
 
+
+        // Male, "czytelne" promienie sfer - uzywane w stylu BallAndStick, gdzie
+        // sfera ma tylko zaznaczac polozenie atomu, nie wypelniac przestrzeni.
         private static readonly Dictionary<string, double> AtomRadii = new()
         {
             { "H", 0.25 },
@@ -56,6 +60,39 @@ namespace PDBViewer.Vizualization
         };
 
         private const double DefaultAtomRadius = 0.40;
+
+        // Prawdziwe promienie van der Waalsa (Bondi, 1964) - te same wartosci,
+        // co tabela VdwRadii w PDBLibrary.Validation.ClashDetector, celowo
+        // zdublowane tutaj (wizualizacja nie powinna zalezec od walidacji).
+        // Uzywane WYLACZNIE w stylu Atoms, zeby konflikt steryczny (atomy blizej
+        // siebie niz suma ich promieni vdW) byl widoczny goly okiem jako
+        // nachodzace sie na siebie sfery.
+        private static readonly Dictionary<string, double> RealisticAtomRadii = new()
+        {
+            { "H", 1.20 },
+            { "C", 1.70 },
+            { "N", 1.55 },
+            { "O", 1.52 },
+            { "S", 1.80 },
+            { "P", 1.80 },
+            { "F", 1.47 },
+            { "CL", 1.75 },
+            { "BR", 1.85 },
+            { "I", 1.98 },
+            { "ZN", 0.88 },
+            { "NA", 1.02 },
+            { "MG", 0.86 },
+            { "FE", 0.78 },
+            { "MN", 0.97 },
+            { "CU", 0.91 },
+            { "CO", 0.89 },
+            { "NI", 0.83 },
+            { "K", 1.51 },
+            { "CA", 1.14 },
+            { "XE", 2.16 }
+        };
+
+        private const double DefaultRealisticAtomRadius = 1.70;
 
         private const double BondRadius = 0.12;
 
@@ -87,7 +124,7 @@ namespace PDBViewer.Vizualization
             var allResidues = protein.Chains
                 .SelectMany(chain => chain.Residues)
                 .ToList();
-
+            _lastStyle = style;
             var allAtoms = allResidues
                 .SelectMany(residue => residue.Atoms)
                 .ToList();
@@ -129,7 +166,8 @@ namespace PDBViewer.Vizualization
                 return result;
             }
 
-
+            // Sfery atomow: wszystkie style OPROCZ Stick (sam szkielet wiazan,
+            // bez widocznych atomow).
             if (style != VisualizationStyle.Wireframe)
             {
                 /*
@@ -151,20 +189,22 @@ namespace PDBViewer.Vizualization
                 {
                     string element = NormalizeElement(atom.Element);
 
-                    if (!meshesByElement.TryGetValue( element, out var mesh))
+                    if (!meshesByElement.TryGetValue(element, out var mesh))
                     {
                         mesh = new MeshGeometry3D();
                         meshesByElement[element] = mesh;
                     }
 
-                    AddAtomSphere(mesh,atom,sphereSegments,sphereRings);
+                    double radius = GetDisplayAtomRadius(element, style);
+
+                    AddAtomSphere(mesh, atom, radius, sphereSegments, sphereRings);
                 }
 
                 foreach (var pair in meshesByElement)
                 {
                     string element = pair.Key;
 
-                    Color color =CpkColors.TryGetValue( element,out var foundColor)
+                    Color color = CpkColors.TryGetValue(element, out var foundColor)
                             ? foundColor
                             : Colors.Magenta;
 
@@ -176,60 +216,81 @@ namespace PDBViewer.Vizualization
 
                     mesh.Freeze();
 
-                    var geometryModel = new GeometryModel3D( mesh, material)
-                        {
-                            BackMaterial = material
-                        };
+                    var geometryModel = new GeometryModel3D(mesh, material)
+                    {
+                        BackMaterial = material
+                    };
 
-                    result.Model.Children.Add( geometryModel);
+                    result.Model.Children.Add(geometryModel);
                 }
             }
 
-            if (style != VisualizationStyle.SpheresOnly)
+            // Wiazania: rysowane we WSZYSTKICH stylach atomowych (BallAndStick,
+            // Stick, Atoms) - w szczegolnosci Atoms tez ma je miec widoczne
+            // (wystaja tam, gdzie sfery vdW sie nie stykaja).
+            if (style != VisualizationStyle.Atoms)
             {
-                var bonds =BondDetector.DetectBonds(protein);
+                var bonds = BondDetector.DetectBonds(protein);
 
                 var bondMesh = new MeshGeometry3D();
 
-                double radius = style == VisualizationStyle.Wireframe
-                        ? 0.05
-                        : BondRadius;
-
                 foreach (var bond in bonds)
                 {
-                    var p1 = new Point3D( bond.Atom1.X, bond.Atom1.Y, bond.Atom1.Z);
+                    var p1 = new Point3D(
+                        bond.Atom1.X,
+                        bond.Atom1.Y,
+                        bond.Atom1.Z);
 
-                    var p2 = new Point3D( bond.Atom2.X, bond.Atom2.Y, bond.Atom2.Z);
+                    var p2 = new Point3D(
+                        bond.Atom2.X,
+                        bond.Atom2.Y,
+                        bond.Atom2.Z);
 
-                    AddCylinderMesh( bondMesh, p1, p2, radius, cylinderSides);
+                    AddCylinderMesh(
+                        bondMesh,
+                        p1,
+                        p2,
+                        BondRadius,
+                        cylinderSides);
 
-                    if (atomToResidue.TryGetValue( bond.Atom1, out var residue1))
+                    if (atomToResidue.TryGetValue(
+                            bond.Atom1,
+                            out var residue1))
                     {
-                        result.ResidueInfo[residue1].Bonds.Add(bond);
+                        result.ResidueInfo[residue1]
+                            .Bonds.Add(bond);
                     }
 
-                    if (atomToResidue.TryGetValue( bond.Atom2, out var residue2))
+                    if (atomToResidue.TryGetValue(
+                            bond.Atom2,
+                            out var residue2))
                     {
                         if (residue2 != residue1)
                         {
-                            result.ResidueInfo[residue2].Bonds.Add(bond);
+                            result.ResidueInfo[residue2]
+                                .Bonds.Add(bond);
                         }
                     }
                 }
 
-                var bondMaterial =  MaterialHelper.CreateMaterial(Colors.LightGray);
+                var bondMaterial =
+                    MaterialHelper.CreateMaterial(
+                        Colors.LightGray);
 
                 bondMaterial.Freeze();
-
                 bondMesh.Freeze();
 
-                var bondModel = new GeometryModel3D( bondMesh, bondMaterial)
+                var bondModel =
+                    new GeometryModel3D(
+                        bondMesh,
+                        bondMaterial)
                     {
                         BackMaterial = bondMaterial
                     };
 
                 result.Model.Children.Add(bondModel);
             }
+            
             // ZAMROŻENIE CAŁEGO MODELU
 
             /*
@@ -246,6 +307,26 @@ namespace PDBViewer.Vizualization
 
             return result;
         }
+
+        /// <summary>
+        /// Promien sfery atomu do wyswietlenia, zalezny od wybranego stylu:
+        /// Atoms -> prawdziwy promien van der Waalsa (zeby kolizje byly widoczne),
+        /// inne (BallAndStick) -> maly, "czytelny" promien.
+        /// </summary>
+        private static double GetDisplayAtomRadius(string normalizedElement, VisualizationStyle style)
+        {
+            if (style == VisualizationStyle.Atoms)
+            {
+                return RealisticAtomRadii.TryGetValue(normalizedElement, out double realistic)
+                    ? realistic
+                    : DefaultRealisticAtomRadius;
+            }
+
+            return AtomRadii.TryGetValue(normalizedElement, out double small)
+                ? small
+                : DefaultAtomRadius;
+        }
+
         /// <summary>
         /// Normalizuje nazwę pierwiastka.
         ///
@@ -266,7 +347,7 @@ namespace PDBViewer.Vizualization
 
             string upper = element.Trim().ToUpperInvariant();
 
-            if (CpkColors.ContainsKey(upper) ||AtomRadii.ContainsKey(upper))
+            if (CpkColors.ContainsKey(upper) || AtomRadii.ContainsKey(upper) || RealisticAtomRadii.ContainsKey(upper))
             {
                 return upper;
             }
@@ -286,7 +367,7 @@ namespace PDBViewer.Vizualization
         /// Bardzo duże:
         ///     6 x 4
         /// </summary>
-        private static (int segments,int rings) GetSphereResolution(int atomCount)
+        private static (int segments, int rings) GetSphereResolution(int atomCount)
         {
             if (atomCount > 15000)
                 return (6, 4);

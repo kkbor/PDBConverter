@@ -29,7 +29,7 @@ namespace PDBViewer
         private Protein? _protein;
         private readonly ProteinVisualizer _visualizer = new();
 
-        // dane (nie modele!) potrzebne do zbudowania overlayu podswietlenia danej reszty
+        // dane potrzebne do zbudowania overlayu podswietlenia danej reszty
         private Dictionary<Residues, ResidueGeometryInfo> _residueInfo = new();
 
         private Residues? _highlightedResidue;
@@ -52,9 +52,26 @@ namespace PDBViewer
 
         // wyniki ostatniej walidacji struktury (do wyswietlenia w panelu po prawej)
         private readonly ObservableCollection<ValidationIssueViewModel> _validationIssues = new();
+
         // wyniki aktualnego zapytania w wyszukiwarce aminokwasow/reszt
         private readonly ObservableCollection<ResidueSearchResultItem> _residueSearchResults = new();
 
+        // Atomy biorace udzial w OSTATNIO wykrytym konflikcie sterycznym po
+        // mutacji (czerwony overlay) - null, gdy nic aktualnie nie koliduje.
+        // Celowo PRZETRWA zmiane zaznaczenia/deselekcje (uzytkownik ma dalej
+        // widziec, ze cos koliduje, nawet jak kliknie gdzie indziej) - znika
+        // dopiero przy kolejnej mutacji albo recznym "Waliduj strukture".
+        private IReadOnlyList<Atoms>? _lastClashAtoms;
+
+        // Wszystkie reszty, ktore kiedykolwiek podmienilismy w tej sesji (na
+        // dowolny aminokwas, niezaleznie od wyniku). Lista walidacji oraz
+        // czerwony overlay kolizji sa budowane na nowo (RefreshMutationIssues)
+        // ze WSZYSTKICH tych reszt na raz, nie tylko tej ostatnio zmienionej -
+        // dzieki temu problem spowodowany wczesniejsza podmiana zostaje
+        // widoczny niezaleznie od tego, co robimy pozniej (zaznaczanie, zmiana
+        // stylu, kolejna mutacja gdzie indziej), a znika dopiero wtedy, gdy
+        // faktycznie przestaje wystepowac.
+        private readonly HashSet<Residues> _mutatedResidues = new();
 
         public MainWindow()
         {
@@ -113,8 +130,16 @@ namespace PDBViewer
                 ErrorCountText.Text = "0";
                 WarningCountText.Text = "0";
 
+                // nowy plik -> czerwony overlay kolizji i lista podmian z
+                // poprzedniej struktury na pewno juz nie dotycza niczego aktualnego
+                _lastClashAtoms = null;
+                _mutatedResidues.Clear();
+
                 RenderProtein(resetCamera: true);
                 BuildSequencePanel();
+
+                // nowa struktura -> poprzednie wyniki wyszukiwania odnosily sie
+                // do (mozliwe ze juz nieistniejacych) reszt z poprzedniego pliku
                 ResidueSearchBox.Clear();
                 RunResidueSearch(string.Empty);
             }
@@ -169,6 +194,13 @@ namespace PDBViewer
             if (_protein == null)
                 return;
 
+            // Reczna, pelna walidacja struktury zastepuje (uniewaznia) ewentualny
+            // czerwony overlay kolizji z ostatniej mutacji - od teraz liczy sie
+            // swiezy wynik tej walidacji, ktory i tak pokazuje wszystkie aktualne
+            // konflikty na liscie ponizej.
+            _lastClashAtoms = null;
+            ClashHighlightModelVisual.Content = null;
+
             var report = StructureValidator.Validate(_protein);
 
             _validationIssues.Clear();
@@ -216,8 +248,8 @@ namespace PDBViewer
             var style = StyleCombo.SelectedIndex switch
             {
                 0 => VisualizationStyle.BallAndStick,
-                1 => VisualizationStyle.SpheresOnly,
-                2 => VisualizationStyle.Wireframe,
+                1 => VisualizationStyle.Wireframe,
+                2 => VisualizationStyle.Atoms,
                 3 => VisualizationStyle.Cartoon,
                 _ => VisualizationStyle.BallAndStick
             };
@@ -232,11 +264,11 @@ namespace PDBViewer
             HighlightModelVisual.Content = null;
             _highlightedResidue = null;
 
-            // Czerwony overlay kolizji zawsze czyścimy przy przebudowie geometrii -
-            // dotyczył konkretnych atomów z POPRZEDNIEGO stanu struktury; jeśli
-            // nadal jest aktualny, wywołujący (MutateButton_Click) ustawi go na
-            // nowo po tym wywołaniu, korzystając z atomów z nowej geometrii.
-            ClashHighlightModelVisual.Content = null;
+           
+            ClashHighlightModelVisual.Content =
+                _lastClashAtoms != null
+                    ? _visualizer.BuildClashHighlightModel(_lastClashAtoms)
+                    : null;
 
             // jesli jakas reszta byla zaznaczona, po przebudowie geometrii
             // pokaz jej podswietlenie ponownie (ta sama instancja Residues przetrwala)
@@ -363,16 +395,23 @@ namespace PDBViewer
             item = null!;
             return false;
         }
+
         // --- Wyszukiwarka aminokwasow/reszt ---
 
         private void ResidueSearchBox_TextChanged(object sender, TextChangedEventArgs e)
         {
             RunResidueSearch(ResidueSearchBox.Text);
         }
+
+        // Po powrocie do pola (np. klikniecie w nie ponownie) pokazujemy liste
+        // wynikow z powrotem, jesli cos jest wpisane - sama lista chowa sie po
+        // wybraniu wyniku (ponizej), wiec bez tego nie dalo by sie do niej wrocic
+        // bez kasowania/retypowania tekstu.
         private void ResidueSearchBox_GotFocus(object sender, RoutedEventArgs e)
         {
             RunResidueSearch(ResidueSearchBox.Text);
         }
+
         private void ResidueSearchBox_KeyDown(object sender, KeyEventArgs e)
         {
             // Enter -> przejdz od razu do pierwszego wyniku, bez koniecznosci
@@ -454,6 +493,7 @@ namespace PDBViewer
                 _ => $"{matches.Count} wyników"
             };
         }
+
         // Dopasowanie tekstowe zapytania do aminokwasu - sprawdza kolejno:
         // fragment 3-literowego kodu, dokladny 1-literowy kod (tylko gdy
         // zapytanie to pojedyncza litera) i fragment pelnej polskiej nazwy.
@@ -488,8 +528,6 @@ namespace PDBViewer
             if (chainItem == null)
                 return;
 
-            // Upewnij sie, ze kontenery wierszy lancuchow (gorny ItemsControl NIE
-            // jest zwirtualizowany) sa juz wygenerowane dla aktualnego stanu kolekcji.
             SequenceItemsControl.UpdateLayout();
 
             if (SequenceItemsControl.ItemContainerGenerator.ContainerFromItem(chainItem) is not FrameworkElement chainContainer)
@@ -547,6 +585,7 @@ namespace PDBViewer
 
             return parent as T;
         }
+
         // --- Najechanie/klikniecie bezposrednio na model 3D ---
 
         private void Viewport_MouseMove(object sender, MouseEventArgs e)
@@ -642,8 +681,6 @@ namespace PDBViewer
                 return;
             }
 
-            ClashHighlightModelVisual.Content = null;
-
             if (_selectedItem != null)
             {
                 _selectedItem.IsSelected = false;
@@ -684,7 +721,6 @@ namespace PDBViewer
             _selectedResidue = null;
             SelectedResidueText.Text = "brak (kliknij literę w sekwencji lub model 3D)";
             MutateButton.IsEnabled = false;
-            ClashHighlightModelVisual.Content = null;
         }
 
         // Centralny punkt stanu "najechania" - dziala identycznie niezaleznie od
@@ -792,6 +828,8 @@ namespace PDBViewer
             // odswiez litere/tooltip w panelu sekwencji bez przebudowy calej listy
             _selectedItem.RefreshFromResidue();
 
+            _mutatedResidues.Add(_selectedResidue);
+
             // atomy sie zmienily -> trzeba przebudowac geometrie 3D
             RenderProtein();
 
@@ -803,14 +841,16 @@ namespace PDBViewer
                       $"(wykryto kolizję przestrzenną - żaden obrót jej nie usunął)"
                     : $"{_selectedResidue.Name} {_selectedResidue.Id}";
 
-            RunMutationValidation(_selectedResidue);
+            RefreshMutationIssues();
 
-            // Jeżeli konformacja z szablonu kolidowała, dopisujemy do LISTY
-            // walidacji (ValidationIssuesList - ta sama, przewijana, co prawdziwe
-            // błędy/ostrzeżenia) log KOLEJNYCH prób obrotu: najpierw błąd przy
-            // oryginalnej konformacji, potem kolejne błędy przy kolejnych obrotach.
-            // Celowo NIE dopisujemy tego do ValidationSummaryText (zwykły TextBlock
-            // bez przewijania) - przy wielu próbach rozciągałby panel w nieskończoność.
+            // Dopisujemy do tej samej listy (ValidationIssuesList - przewijana)
+            // log KOLEJNYCH prob obrotu: najpierw blad przy oryginalnej
+            // konformacji, potem kolejne przy kolejnych obrotach. To czysto
+            // diagnostyczny zapis TEJ JEDNEJ mutacji (nie duplikujemy w nim
+            // samych problemow - te sa juz na liscie dzieki RefreshMutationIssues
+            // powyzej). Celowo NIE dopisujemy tego do ValidationSummaryText
+            // (zwykly TextBlock bez przewijania) - przy wielu probach
+            // rozciagalby panel w nieskonczonosc.
             if (rotationResult.Attempted && rotationResult.HadInitialClash)
             {
                 AddInfoLine("— Log prób obrotu łańcucha bocznego (CA-CB), by usunąć kolizję: —");
@@ -821,33 +861,6 @@ namespace PDBViewer
                 AddInfoLine(rotationResult.FoundBetter
                     ? $"→ wybrano obrót {rotationResult.FinalAngleDegrees:F0}°."
                     : "→ żaden obrót nie poprawił sytuacji - zostawiono konformację z szablonu.");
-
-                // Jeśli przy WYBRANYM obrocie coś jednak zostało (np. mniej błędów,
-                // ale nie zero), pokazujemy dokładną treść tego, co zostało - a nie
-                // tylko samą liczbę w logu powyżej. To jest dokładnie to ostrzeżenie,
-                // przy którym walidacja scoped (RunMutationValidation) się zatrzymała.
-                var finalAttempt = rotationResult.Attempts
-                    .FirstOrDefault(a => a.AngleDegrees == rotationResult.FinalAngleDegrees);
-
-                if (finalAttempt.Issues != null && finalAttempt.Issues.Count > 0)
-                {
-                    AddInfoLine("Pozostałe problemy przy wybranym obrocie:");
-
-                    foreach (var issue in finalAttempt.Issues)
-                        _validationIssues.Add(new ValidationIssueViewModel(issue));
-                    // Podświetlamy na czerwono DOKŁADNIE te atomy, które nadal
-                    // kolidują przy ostatecznie wybranym obrocie (geometria w
-                    // _residueInfo już odpowiada tej konformacji, bo RenderProtein()
-                    // przebudowała ją po tym, jak ResidueMutator.Mutate zostawił
-                    // atomy reszty w najlepszej znalezionej pozycji).
-                    var clashingAtoms = finalAttempt.Issues
-                        .SelectMany(i => new[] { i.Atom, i.AtomB })
-                        .Where(a => a != null)
-                        .Select(a => a!)
-                        .Distinct();
-
-                    ClashHighlightModelVisual.Content = _visualizer.BuildClashHighlightModel(clashingAtoms);
-                }
             }
         }
 
@@ -863,32 +876,94 @@ namespace PDBViewer
                 Residue = _selectedResidue
             }));
         }
-        private void RunMutationValidation(Residues changedResidue)
+        // Przebudowuje liste walidacji (ValidationIssuesList) ORAZ czerwony
+        // overlay kolizji w 3D na podstawie AKTUALNEGO stanu WSZYSTKICH reszt,
+        // ktore kiedykolwiek podmienilismy w tej sesji (_mutatedResidues) - nie
+        // tylko tej jednej, ktora wlasnie zostala zmieniona.
+        //
+        // Dzieki temu:
+        //   - problem spowodowany WCZESNIEJSZA podmiana (gdzies indziej w
+        //     strukturze) nie znika z ekranu tylko dlatego, ze teraz
+        //     podmieniamy (albo tylko zaznaczamy/przegladamy) cos innego,
+        //   - a gdy dany problem faktycznie zostanie naprawiony, sam zniknie -
+        //     bo ValidateAfterMutation po prostu przestanie go zglaszac.
+        //
+        // Celowo NIE miesza sie to z pelna walidacja calej struktury
+        // (RunValidation / przycisk "Waliduj strukture") - to osobny, swiadomy
+        // jednorazowy podglad WSZYSTKICH problemow w pliku (w tym tych, ktore
+        // byly w nim od poczatku), a nie tylko spowodowanych podmianami.
+        private void RefreshMutationIssues()
         {
             if (_protein == null)
                 return;
 
-            var report = StructureValidator.ValidateAfterMutation(
-                _protein,
-                changedResidue);
+            var seenKeys = new HashSet<string>();
+            var allIssues = new List<ValidationIssue>();
+
+            foreach (var residue in _mutatedResidues)
+            {
+                var report = StructureValidator.ValidateAfterMutation(_protein, residue);
+
+                foreach (var issue in report.Issues)
+                {
+                    // Ten sam fizyczny konflikt miedzy dwiema podmienionymi
+                    // resztami zostalby zglaszany DWA razy (raz z perspektywy
+                    // kazdej z nich) - odfiltrowujemy duplikaty.
+                    if (seenKeys.Add(IssueKey(issue)))
+                        allIssues.Add(issue);
+                }
+            }
 
             _validationIssues.Clear();
 
-            foreach (var issue in report.Issues.OrderByDescending(i => i.Severity))
+            foreach (var issue in allIssues.OrderByDescending(i => i.Severity))
                 _validationIssues.Add(new ValidationIssueViewModel(issue));
 
-            ErrorCountText.Text = report.ErrorCount.ToString();
-            WarningCountText.Text = report.WarningCount.ToString();
+            int errorCount = allIssues.Count(i => i.Severity == ValidationSeverity.Error);
+            int warningCount = allIssues.Count(i => i.Severity == ValidationSeverity.Warning);
 
-            ValidationSummaryText.Text =
-                report.Issues.Count == 0
-                    ? $"Podmiana {changedResidue.Name} {changedResidue.Id}: brak problemów."
-                    : $"Podmiana {changedResidue.Name} {changedResidue.Id}: " +
-                      $"znaleziono {report.ErrorCount} błędów i " +
-                      $"{report.WarningCount} ostrzeżeń.";
+            ErrorCountText.Text = errorCount.ToString();
+            WarningCountText.Text = warningCount.ToString();
 
-            // Jeżeli są problemy, można automatycznie otworzyć panel
-            ValidationExpander.IsExpanded = report.Issues.Count > 0;
+            ValidationSummaryText.Text = allIssues.Count == 0
+                ? "Brak problemów wynikających z dotychczasowych podmian aminokwasów."
+                : $"Problemy wynikające z dotychczasowych podmian: " +
+                  $"{errorCount} błędów, {warningCount} ostrzeżeń.";
+
+            // Ten sam, zawsze aktualny zestaw atomow zasila tez czerwony
+            // overlay kolizji w 3D - zob. _lastClashAtoms i RenderProtein().
+            _lastClashAtoms = allIssues
+                .SelectMany(i => new[] { i.Atom, i.AtomB })
+                .Where(a => a != null)
+                .Select(a => a!)
+                .Distinct()
+                .ToList();
+
+            ClashHighlightModelVisual.Content = _lastClashAtoms.Count > 0
+                ? _visualizer.BuildClashHighlightModel(_lastClashAtoms)
+                : null;
+
+            ValidationExpander.IsExpanded = allIssues.Count > 0;
+        }
+
+        // Tozsamosc problemu na potrzeby odfiltrowania duplikatow w
+        // RefreshMutationIssues: konflikt steryczny identyfikujemy po
+        // DOKLADNEJ parze atomow (niezaleznie od kolejnosci), inne problemy
+        // (np. przerwa w lancuchu) po parze reszt + tresci komunikatu.
+        private static string IssueKey(ValidationIssue issue)
+        {
+            if (issue.Atom != null && issue.AtomB != null)
+            {
+                int h1 = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(issue.Atom);
+                int h2 = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(issue.AtomB);
+
+                return h1 < h2 ? $"A:{h1}:{h2}" : $"A:{h2}:{h1}";
+            }
+
+            int rh1 = issue.Residue != null ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(issue.Residue) : 0;
+            int rh2 = issue.ResidueB != null ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(issue.ResidueB) : 0;
+
+            return $"R:{rh1}:{rh2}:{issue.Message}";
         }
     }
 }
