@@ -1,10 +1,8 @@
 ﻿using PDBLibrary.Models;
-using System;
-using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace PDBLibrary.Parsers
 {
@@ -40,11 +38,22 @@ namespace PDBLibrary.Parsers
 
             foreach (var chain in protein.Chains)
             {
-                foreach (var residue in chain.Residues.OrderBy(r => r.Id))
+                foreach (var residue in chain.Residues
+                             .OrderBy(r => r.Id)
+                             .ThenBy(r => r.InsertionCode))
                 {
+                    // KLUCZOWE dla poprawnego otwarcia w innych programach:
+                    // standardowy aminokwas -> "ATOM", wszystko inne (woda HOH,
+                    // jony NA/ZN/..., ligandy GOL/FAD/4MV itd.) -> "HETATM".
+                    // Bez tego np. PyMOL/ChimeraX moga probowac wplatac wode
+                    // czy jon w lancuch polimeru.
+                    string groupPdb = AminoAcidCodes.IsStandardAminoAcid(residue.Name)
+                        ? "ATOM"
+                        : "HETATM";
+
                     foreach (var atom in residue.Atoms)
                     {
-                        writer.WriteLine(FormatRow(atom, serial, chain.Id, residue));
+                        writer.WriteLine(FormatRow(groupPdb, atom, serial, chain.Id, residue));
                         serial++;
                     }
                 }
@@ -53,13 +62,13 @@ namespace PDBLibrary.Parsers
             writer.WriteLine("#");
         }
 
-        private static string FormatRow(Atoms atom, int serial, char chainId, Residues residue)
+        private static string FormatRow(string groupPdb, Atoms atom, int serial, char chainId, Residues residue)
         {
             string element = string.IsNullOrWhiteSpace(atom.Element) ? "?" : atom.Element.Trim();
 
             var fields = new[]
             {
-                "ATOM",
+                groupPdb,
                 serial.ToString(CultureInfo.InvariantCulture),
                 element,
                 Escape(atom.Name),
@@ -86,4 +95,3 @@ namespace PDBLibrary.Parsers
         }
     }
 }
-

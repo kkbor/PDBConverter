@@ -1,25 +1,26 @@
 ﻿using PDBLibrary.Models;
-using System;
-using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace PDBLibrary.Parsers
 {
     /// <summary>
     /// Zapisuje model Protein z powrotem do pliku .pdb, w ukladzie kolumnowym
     /// DOKLADNIE zgodnym z tym, co odczytuje PdbParsers (te same indeksy
-    /// Substring), zeby zapisany plik dalo sie bez strat wczytac ponownie.
+    /// Substring), zeby zapisany plik dalo sie bez strat wczytac ponownie -
+    /// ORAZ zgodnym ze specyfikacja PDB na tyle, zeby otworzyl sie poprawnie
+    /// w innych programach (PyMOL, Chimera/ChimeraX, VMD, Coot, MolProbity...).
     ///
     /// Kolumny (1-indeksowane, zgodnie ze specyfikacja PDB):
-    ///   1-6   "ATOM  "
+    ///   1-6   "ATOM  " albo "HETATM"
     ///   7-11  numer seryjny atomu
     ///   13-16 nazwa atomu
     ///   18-20 nazwa reszty
     ///   22    identyfikator lancucha
     ///   23-26 numer reszty
+    ///   27    kod wstawienia (insertion code)
     ///   31-38 / 39-46 / 47-54   X / Y / Z  (%8.3f)
     ///   55-60 occupancy (%6.2f)
     ///   61-66 b-factor (%6.2f)
@@ -39,35 +40,64 @@ namespace PDBLibrary.Parsers
 
             foreach (var chain in protein.Chains)
             {
-                int lastSerial = serial;
-                Residues? lastResidue = null;
+                // KLUCZOWE dla poprawnego otwarcia w innych programach: standardowe
+                // aminokwasy musza isc jako ATOM, a wszystko inne (woda HOH, jony
+                // NA/ZN/..., ligandy GOL/FAD/4MV itd.) jako HETATM - inaczej np.
+                // PyMOL/Rosetta/MolProbity moga probowac traktowac czasteczke wody
+                // albo jon jako czesc lancucha polimeru i zle policzyc polaczenia
+                // czy walidacje geometrii. Zgodnie z konwencja PDB najpierw
+                // zapisujemy caly polimer (ATOM) danego lancucha, potem TER, a
+                // dopiero potem jego heteroatomy (HETATM).
+                var polymerResidues = chain.Residues
+                    .Where(r => AminoAcidCodes.IsStandardAminoAcid(r.Name))
+                    .OrderBy(r => r.Id)
+                    .ThenBy(r => r.InsertionCode)
+                    .ToList();
 
-                foreach (var residue in chain.Residues.OrderBy(r => r.Id))
+                var heteroResidues = chain.Residues
+                    .Where(r => !AminoAcidCodes.IsStandardAminoAcid(r.Name))
+                    .OrderBy(r => r.Id)
+                    .ThenBy(r => r.InsertionCode)
+                    .ToList();
+
+                int lastPolymerSerial = serial;
+
+                foreach (var residue in polymerResidues)
                 {
                     foreach (var atom in residue.Atoms)
                     {
-                        writer.WriteLine(FormatAtomLine(atom, serial, chain.Id, residue));
-                        lastSerial = serial;
+                        writer.WriteLine(FormatAtomLine("ATOM  ", atom, serial, chain.Id, residue));
+                        lastPolymerSerial = serial;
                         serial++;
                     }
-
-                    lastResidue = residue;
                 }
 
                 // TER jest opcjonalny dla naszego wlasnego parsera (czyta tylko
-                // ATOM/HETATM), ale dobra praktyka dla zgodnosci z innymi narzedziami
-                if (lastResidue != null)
-                    writer.WriteLine(FormatTerLine(lastSerial + 1, chain.Id, lastResidue));
+                // ATOM/HETATM), ale dobra praktyka dla zgodnosci z innymi narzedziami -
+                // oznacza koniec lancucha polimeru. Piszemy go TYLKO gdy w tym
+                // lancuchu faktycznie byl jakis polimer (sam HETATM, np. czysty
+                // lancuch wody, nie dostaje TER).
+                if (polymerResidues.Count > 0)
+                    writer.WriteLine(FormatTerLine(lastPolymerSerial + 1, chain.Id, polymerResidues[^1]));
+
+                foreach (var residue in heteroResidues)
+                {
+                    foreach (var atom in residue.Atoms)
+                    {
+                        writer.WriteLine(FormatAtomLine("HETATM", atom, serial, chain.Id, residue));
+                        serial++;
+                    }
+                }
             }
 
             writer.WriteLine("END");
         }
 
-        private static string FormatAtomLine(Atoms atom, int serial, char chainId, Residues residue)
+        private static string FormatAtomLine(string recordName, Atoms atom, int serial, char chainId, Residues residue)
         {
             var sb = new StringBuilder();
 
-            sb.Append("ATOM  ");                                        // 1-6
+            sb.Append(recordName);                                        // 1-6 ("ATOM  " / "HETATM")
             sb.Append(serial.ToString(CultureInfo.InvariantCulture).PadLeft(5)); // 7-11
             sb.Append(' ');                                              // 12
             sb.Append(FormatAtomName(atom.Name));                        // 13-16
@@ -76,7 +106,8 @@ namespace PDBLibrary.Parsers
             sb.Append(' ');                                              // 21
             sb.Append(chainId);                                          // 22
             sb.Append(residue.Id.ToString(CultureInfo.InvariantCulture).PadLeft(4)); // 23-26
-            sb.Append("    ");                                           // 27-30 (iCode + blank)
+            sb.Append(FormatInsertionCode(residue.InsertionCode));       // 27
+            sb.Append("   ");                                            // 28-30 (blank)
             sb.Append(FormatCoord(atom.X));                              // 31-38
             sb.Append(FormatCoord(atom.Y));                              // 39-46
             sb.Append(FormatCoord(atom.Z));                              // 47-54
@@ -98,8 +129,15 @@ namespace PDBLibrary.Parsers
             sb.Append(' ');
             sb.Append(chainId);
             sb.Append(lastResidue.Id.ToString(CultureInfo.InvariantCulture).PadLeft(4));
+            sb.Append(FormatInsertionCode(lastResidue.InsertionCode));
             return sb.ToString();
         }
+
+        // Puste miejsce (nie '\0') gdy reszta nie ma kodu wstawienia - '\0'
+        // wpisany doslownie do pliku tekstowego wygladalby jak uszkodzony plik
+        // w niejednym parserze.
+        private static char FormatInsertionCode(char insertionCode)
+            => insertionCode == '\0' ? ' ' : insertionCode;
 
         private static string FormatAtomName(string name)
         {
