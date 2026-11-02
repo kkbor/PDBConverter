@@ -29,7 +29,7 @@ namespace PDBViewer
         private Protein? _protein;
         private readonly ProteinVisualizer _visualizer = new();
 
-        // dane potrzebne do zbudowania overlayu podswietlenia danej reszty
+        // dane (nie modele!) potrzebne do zbudowania overlayu podswietlenia danej reszty
         private Dictionary<Residues, ResidueGeometryInfo> _residueInfo = new();
 
         private Residues? _highlightedResidue;
@@ -264,7 +264,13 @@ namespace PDBViewer
             HighlightModelVisual.Content = null;
             _highlightedResidue = null;
 
-           
+            // Czerwony overlay kolizji NIE jest tu juz bezwarunkowo czyszczony -
+            // ma zostac widoczny (do kolejnej mutacji albo recznej walidacji)
+            // takze wtedy, gdy geometria jest przebudowywana z innego powodu niz
+            // mutacja (np. zmiana stylu wizualizacji). _lastClashAtoms wskazuje
+            // te same obiekty Atoms co w _protein (mutacja ich nie podmienia -
+            // zostawia je po prostu w nowej, najlepszej znalezionej pozycji),
+            // wiec da sie je po prostu narysowac na nowo na swiezej geometrii.
             ClashHighlightModelVisual.Content =
                 _lastClashAtoms != null
                     ? _visualizer.BuildClashHighlightModel(_lastClashAtoms)
@@ -439,6 +445,10 @@ namespace PDBViewer
             {
                 SelectResidue(result.Residue);
                 ScrollToResidueInSequencePanel(result.Residue);
+
+                // Lista wynikow chowa sie zaraz po wybraniu - zeby nie zaslaniala
+                // panelu sekwencji/widoku 3D przez caly czas pracy z wybrana reszta.
+                // Wraca po ponownym kliknieciu w pole (GotFocus) albo zmianie tekstu.
                 ResidueSearchResultsList.Visibility = Visibility.Collapsed;
             }
         }
@@ -528,6 +538,8 @@ namespace PDBViewer
             if (chainItem == null)
                 return;
 
+            // Upewnij sie, ze kontenery wierszy lancuchow (gorny ItemsControl NIE
+            // jest zwirtualizowany) sa juz wygenerowane dla aktualnego stanu kolekcji.
             SequenceItemsControl.UpdateLayout();
 
             if (SequenceItemsControl.ItemContainerGenerator.ContainerFromItem(chainItem) is not FrameworkElement chainContainer)
@@ -681,6 +693,11 @@ namespace PDBViewer
                 return;
             }
 
+            // Uwaga: NIE czyscimy tu juz ClashHighlightModelVisual - czerwony
+            // overlay kolizji po mutacji ma zostac widoczny takze po zmianie
+            // zaznaczenia na inna reszte (znika dopiero przy kolejnej mutacji
+            // albo recznym "Waliduj strukture" - zob. _lastClashAtoms).
+
             if (_selectedItem != null)
             {
                 _selectedItem.IsSelected = false;
@@ -721,6 +738,9 @@ namespace PDBViewer
             _selectedResidue = null;
             SelectedResidueText.Text = "brak (kliknij literę w sekwencji lub model 3D)";
             MutateButton.IsEnabled = false;
+
+            // Uwaga: NIE czyscimy tu juz ClashHighlightModelVisual - zob.
+            // komentarz w SelectResidue().
         }
 
         // Centralny punkt stanu "najechania" - dziala identycznie niezaleznie od
@@ -805,18 +825,21 @@ namespace PDBViewer
                 return;
 
             string oldName = _selectedResidue.Name;
-            SideChainRotationResult rotationResult;
+            SideChainRotationProbe probe;
 
             try
             {
-                // ta metoda sama usuwa stary lancuch boczny, zmienia nazwe reszty
+                // Ta metoda sama usuwa stary lancuch boczny, zmienia nazwe reszty
                 // i dobudowuje nowy lancuch boczny z szablonu geometrii (CCD)
-                // nalozonego na szkielet. Na koniec probuje go obrocic wokol
-                // wiazania CA-CB (SideChainOrientationResolver), jesli nowo
-                // zbudowany lancuch boczny koliduje przestrzennie z otoczeniem -
-                // dlatego potrzebuje teraz calego _protein, nie tylko reszty.
-                // Zwraca pelny log prob (nie tylko finalny wynik).
-                rotationResult = ResidueMutator.Mutate(_protein, _selectedResidue, newCode);
+                // nalozonego na szkielet - ale (w przeciwienstwie do dawniejszego
+                // ResidueMutator.Mutate) NIE rozwiazuje jeszcze sama ewentualnej
+                // kolizji przestrzennej obrotem. Zamiast tego zwraca "sonde"
+                // (SideChainRotationProbe) z wynikami WSZYSTKICH sprawdzonych
+                // katow obrotu wokol CA-CB, a reszta zostaje na razie w
+                // konformacji 0 stopni (prosto z szablonu) - decyzje, ktory
+                // wariant zastosowac, podejmujemy ponizej (automatycznie, albo
+                // pytajac uzytkownika osobnym oknem).
+                probe = ResidueMutator.MutateAndProbeRotation(_protein, _selectedResidue, newCode);
             }
             catch (Exception ex)
             {
@@ -825,57 +848,69 @@ namespace PDBViewer
                 return;
             }
 
+            double finalAngle = 0;
+
+            if (probe.Attempted && probe.HadInitialClash)
+            {
+                // Warianty BEZ zadnego bledu (moga sie miedzy soba roznic np.
+                // liczba ostrzezen) - jesli jest ich kilka, to miedzy nimi
+                // uzytkownik ma wybrac sam, zamiast aplikacji wybierajacej
+                // automatycznie "najmniej dotkliwy" wg metryki bledy*2+ostrzezenia.
+                var zeroErrorCandidates = probe.Attempts.Where(a => a.ErrorCount == 0).ToList();
+
+                double recommendedAngle = zeroErrorCandidates.Count > 0
+                    ? zeroErrorCandidates.OrderBy(a => a.WarningCount).First().AngleDegrees
+                    : probe.BestAngleDegrees;
+
+                // Informacja o probach obrotu NIE trafia juz do listy
+                // bledow/ostrzezen walidacji - zawsze pokazujemy ja w osobnym,
+                // dedykowanym oknie. To samo okno, gdy jest wiecej niz jeden
+                // wariant bez bledow, pozwala uzytkownikowi wybrac ktory
+                // zastosowac; w przeciwnym razie pelni wylacznie funkcje
+                // informacyjna (zastosowany zostaje wariant automatyczny).
+                var rotationDialog = new RotationChoiceWindow(
+                    probe.Attempts, zeroErrorCandidates, recommendedAngle, probe.FoundBetter)
+                {
+                    Owner = this
+                };
+                rotationDialog.ShowDialog();
+
+                finalAngle = rotationDialog.ChosenAngleDegrees;
+
+                // Reszta jest wciaz w konformacji 0 stopni (ProbeRotations
+                // zawsze ja tam zostawia) - stosujemy dopiero teraz wybrany
+                // (automatycznie albo recznie) kat.
+                SideChainOrientationResolver.ApplyRotation(_selectedResidue, finalAngle);
+            }
+
             // odswiez litere/tooltip w panelu sekwencji bez przebudowy calej listy
             _selectedItem.RefreshFromResidue();
 
+            // Zapamietujemy, ze ta reszta zostala podmieniona - od teraz jej
+            // ewentualne problemy beda stale sledzone przez RefreshMutationIssues(),
+            // niezaleznie od tego, co zrobimy pozniej.
             _mutatedResidues.Add(_selectedResidue);
 
             // atomy sie zmienily -> trzeba przebudowac geometrie 3D
             RenderProtein();
 
-            SelectedResidueText.Text = rotationResult.FoundBetter
-                ? $"{_selectedResidue.Name} {_selectedResidue.Id} " +
-                  $"(wykryto kolizję przestrzenną - obrócono łańcuch boczny o {rotationResult.FinalAngleDegrees:F0}°)"
-                : rotationResult.HadInitialClash
+            var chosenAttempt = probe.Attempts.FirstOrDefault(a => a.AngleDegrees == finalAngle);
+
+            SelectedResidueText.Text = !probe.Attempted || !probe.HadInitialClash
+                ? $"{_selectedResidue.Name} {_selectedResidue.Id}"
+                : chosenAttempt.ErrorCount == 0 && chosenAttempt.WarningCount == 0
                     ? $"{_selectedResidue.Name} {_selectedResidue.Id} " +
-                      $"(wykryto kolizję przestrzenną - żaden obrót jej nie usunął)"
-                    : $"{_selectedResidue.Name} {_selectedResidue.Id}";
+                      $"(wykryto kolizję przestrzenną - obrócono łańcuch boczny o {finalAngle:F0}°)"
+                    : $"{_selectedResidue.Name} {_selectedResidue.Id} " +
+                      $"(wykryto kolizję przestrzenną - zastosowano obrót {finalAngle:F0}°, pozostałe problemy widoczne na liście)";
 
+            // Przebudowuje liste walidacji i czerwony overlay kolizji w 3D na
+            // podstawie AKTUALNEGO stanu WSZYSTKICH dotychczas podmienionych
+            // reszt (_mutatedResidues) - nie tylko tej jednej, ktora wlasnie
+            // zmienilismy. Patrz komentarz przy RefreshMutationIssues().
             RefreshMutationIssues();
-
-            // Dopisujemy do tej samej listy (ValidationIssuesList - przewijana)
-            // log KOLEJNYCH prob obrotu: najpierw blad przy oryginalnej
-            // konformacji, potem kolejne przy kolejnych obrotach. To czysto
-            // diagnostyczny zapis TEJ JEDNEJ mutacji (nie duplikujemy w nim
-            // samych problemow - te sa juz na liscie dzieki RefreshMutationIssues
-            // powyzej). Celowo NIE dopisujemy tego do ValidationSummaryText
-            // (zwykly TextBlock bez przewijania) - przy wielu probach
-            // rozciagalby panel w nieskonczonosc.
-            if (rotationResult.Attempted && rotationResult.HadInitialClash)
-            {
-                AddInfoLine("— Log prób obrotu łańcucha bocznego (CA-CB), by usunąć kolizję: —");
-
-                foreach (var attempt in rotationResult.Attempts)
-                    AddInfoLine("  • " + attempt);
-
-                AddInfoLine(rotationResult.FoundBetter
-                    ? $"→ wybrano obrót {rotationResult.FinalAngleDegrees:F0}°."
-                    : "→ żaden obrót nie poprawił sytuacji - zostawiono konformację z szablonu.");
-            }
         }
 
-        // Dopisuje jedną linię "informacyjną" (nie błąd/ostrzeżenie ze struktury)
-        // na KONIEC listy walidacji - ValidationIssuesList jest już przewijana
-        // (ScrollViewer wewnątrz), więc dowolnie długi log nie rozsadza panelu.
-        private void AddInfoLine(string message)
-        {
-            _validationIssues.Add(new ValidationIssueViewModel(new ValidationIssue
-            {
-                Severity = ValidationSeverity.Info,
-                Message = message,
-                Residue = _selectedResidue
-            }));
-        }
         // Przebudowuje liste walidacji (ValidationIssuesList) ORAZ czerwony
         // overlay kolizji w 3D na podstawie AKTUALNEGO stanu WSZYSTKICH reszt,
         // ktore kiedykolwiek podmienilismy w tej sesji (_mutatedResidues) - nie

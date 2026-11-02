@@ -44,6 +44,50 @@ namespace PDBLibrary.Srevices
             Residues residue,
             string newThreeLetterCode)
         {
+            ValidateArgsAndBuildTemplate(protein, residue, newThreeLetterCode);
+
+            // Szablon CCD to jedna, uśredniona konformacja - w realnej
+            // strukturze nowy łańcuch boczny może kolidować przestrzennie
+            // z sąsiadami. Zanim oddamy sterowanie dalej, próbujemy to
+            // naprawić czysto algebraicznie: obracając cały łańcuch boczny
+            // wokół wiązania CA-CB, aż przestanie kolidować (albo skończą
+            // się próby kątów) - i od razu stosujemy najlepszy znaleziony wariant.
+            return SideChainOrientationResolver.TryResolveClashes(protein, residue);
+        }
+
+        /// <summary>
+        /// Jak <see cref="Mutate"/>, ale NIE rozwiązuje automatycznie kolizji
+        /// obrotem - zamiast tego sprawdza WSZYSTKIE możliwe obroty i zwraca
+        /// pełną "sondę" (<see cref="SideChainRotationProbe"/>), żeby wywołujący
+        /// (UI) mógł samodzielnie zdecydować, który wariant zastosować -
+        /// automatycznie najlepszy, albo wybrany interaktywnie przez użytkownika,
+        /// gdy jest kilka sensownych (bezbłędnych) opcji do wyboru.
+        ///
+        /// Zaraz po tym wywołaniu reszta jest w konformacji 0° (prosto z
+        /// szablonu CCD, jeszcze nieobrócona) - żeby faktycznie zastosować
+        /// wybrany wariant, trzeba potem wywołać
+        /// <see cref="SideChainOrientationResolver.ApplyRotation"/>.
+        /// </summary>
+        public static SideChainRotationProbe MutateAndProbeRotation(
+            Protein protein,
+            Residues residue,
+            string newThreeLetterCode)
+        {
+            ValidateArgsAndBuildTemplate(protein, residue, newThreeLetterCode);
+
+            return SideChainOrientationResolver.ProbeRotations(protein, residue);
+        }
+
+        /// <summary>
+        /// Wspólna część obu metod: walidacja argumentów, usunięcie starego
+        /// łańcucha bocznego i zbudowanie nowego z szablonu CCD (bez żadnej
+        /// próby rozwiązania kolizji - to robi wywołujący, osobno).
+        /// </summary>
+        private static void ValidateArgsAndBuildTemplate(
+            Protein protein,
+            Residues residue,
+            string newThreeLetterCode)
+        {
             if (protein == null)
                 throw new ArgumentNullException(nameof(protein));
 
@@ -94,14 +138,6 @@ namespace PDBLibrary.Srevices
                     $"dla reszty {residue.Id}, ponieważ brakuje " +
                     $"atomów szkieletu N, CA lub C.");
             }
-
-            // Szablon CCD to jedna, uśredniona konformacja - w realnej
-            // strukturze nowy łańcuch boczny może kolidować przestrzennie
-            // z sąsiadami. Zanim oddamy sterowanie dalej, próbujemy to
-            // naprawić czysto algebraicznie: obracając cały łańcuch boczny
-            // wokół wiązania CA-CB, aż przestanie kolidować (albo skończą
-            // się próby kątów).
-            return SideChainOrientationResolver.TryResolveClashes(protein, residue);
         }
     }
 }
